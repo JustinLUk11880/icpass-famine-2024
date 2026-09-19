@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
-import { Button, Paper, TextField, MenuItem } from '@mui/material';
+import { Alert, Button, Paper, TextField, MenuItem } from '@mui/material';
 import { ThemeProvider,createTheme } from '@mui/material/styles';
 import Grid from '@mui/material/Grid';
 import { setDoc, doc } from 'firebase/firestore';
 
-import { db } from '../database/firebase';
+import { db, auth } from '../database/firebase';
 
 export default function NewUser(props) {
   const theme_3 = createTheme({
@@ -17,7 +17,9 @@ export default function NewUser(props) {
   const characters ='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 
   function generateString(length) {
-      let result = ' ';
+      // Must not start with a space: the id goes into the recovery link as
+      // ?id=..., and a leading space is easily mangled in transit.
+      let result = '';
       const charactersLength = characters.length;
       for ( let i = 0; i < length; i++ ) {
           result += characters.charAt(Math.floor(Math.random() * charactersLength));
@@ -26,8 +28,12 @@ export default function NewUser(props) {
       return result;
   }
 
-  function handleSubmit(e) {
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState(null);
+
+  async function handleSubmit(e) {
     e.preventDefault();
+    if (submitting) return; // a double tap must not create two accounts
     const id = generateString(20);
 
     /* Randomize Stats*/
@@ -56,7 +62,9 @@ export default function NewUser(props) {
     }
   
 
-    setDoc(doc(db, "users", id), {
+    const payload = {
+      // Ties the doc to this browser's anonymous uid so nobody else can edit it.
+      owner: auth.currentUser.uid,
       name: name,
       group: group,
       charityFood: 0,
@@ -66,8 +74,21 @@ export default function NewUser(props) {
       education: handleRandom(educations).education,
       charity: 0,
       married: false,
-    });
-    props.setId(id);
+    };
+
+    // This used to be fire-and-forget: setId ran even when the write failed,
+    // leaving the participant pointed at a document that does not exist.
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      await setDoc(doc(db, "users", id), payload);
+      props.setId(id);
+    } catch (err) {
+      console.error('Could not create account', err);
+      setSubmitError('Could not create your passport. Check the connection and try again.');
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   const [group, setGroup] = useState('');
@@ -116,9 +137,13 @@ export default function NewUser(props) {
                 variant="contained"
                 type="submit"
                 sx={{width: '20em'}}
+                disabled={submitting}
               >
-                Submit
+                {submitting ? 'Creating...' : 'Submit'}
               </Button>
+              {submitError && (
+                <Alert severity="error" sx={{ mt: 2, width: '20em' }}>{submitError}</Alert>
+              )}
             </Grid>
           </Grid>
         </form>

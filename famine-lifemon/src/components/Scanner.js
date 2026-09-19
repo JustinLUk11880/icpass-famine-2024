@@ -49,7 +49,12 @@ export default function Scanner({ setChecked, snapshot, id }) {
 			return { result: 'ignore' };
 		}
 		// affordability checks
-		if (data.food !== undefined && snapshot.food + data.food < 0) return { result: 'fail', reason: 'hungry' };
+		// The passport shows food + charityFood as the apple total, so
+		// affordability must be judged against that total, not the `food`
+		// field alone - otherwise a player who visibly has apples is told
+		// they are hungry, or spends apples they do not have.
+		const totalFood = (snapshot.food ?? 0) + (snapshot.charityFood ?? 0);
+		if (data.food !== undefined && totalFood + data.food < 0) return { result: 'fail', reason: 'hungry' };
 		if (data.happiness !== undefined && snapshot.happiness + data.happiness < 0) return { result: 'fail', reason: 'sad' };
 		if (data.money !== undefined && snapshot.money + data.money < 0) return { result: 'fail', reason: 'poor' };
 		// education requirement
@@ -114,8 +119,10 @@ export default function Scanner({ setChecked, snapshot, id }) {
 				const mRef = doc(db, 'marriages', r.id);
 				marriageOps.push({ ref: mRef, update: { participants: arrayRemove(id), hasDivorced: true } });
 			}
-			// compute money outcome for user
-			data.money = (snapshot.money === undefined ? 0 : snapshot.money) + 700 * awardCount;
+			// Award 700 per intact marriage being dissolved. This must be a DELTA:
+			// it is applied below via increment(), so adding snapshot.money here
+			// would credit the player their existing balance a second time.
+			data.money = 700 * awardCount;
 			userUpdatePayload.married = false;
 		}
 
@@ -146,23 +153,42 @@ export default function Scanner({ setChecked, snapshot, id }) {
 			userUpdatePayload.education = increment(data.education.pass);
 		}
 
-		// handle receiving food bank donations: charityFood and food increase
-		if (data.foodBank !== undefined && data.food !== undefined && data.food > 0) {
-			userUpdatePayload.charityFood = increment(data.food);
-			userUpdatePayload.food = increment(data.food);
-		}
+		// Food accounting. `food` and `charityFood` PARTITION the player's apples
+		// - the passport shows their sum - so every apple lives in exactly one
+		// of the two fields.
+		//
+		// The previous version double-counted on both sides: receiving charity
+		// apples incremented food AND charityFood (+2 per apple), and spending
+		// deducted the full cost from food AND the charity portion again from
+		// charityFood. Over an event that drift is what produced food values
+		// like -166 in the 2024 data.
+		if (data.food !== undefined && data.food !== 0) {
+			const fromFoodBank = data.foodBank !== undefined && data.foodBank !== null;
 
-		// when costing food, cost charityFood first
-		if (data.food !== undefined && data.food < 0) {
-			const foodCost = -data.food;
-			const charityFoodAvailable = snapshot.charityFood;
-			const charityFoodCost = Math.min(charityFoodAvailable, foodCost);
-			if (data.foodBank !== undefined) {
-				falseCharity += charityFoodCost;
+			if (data.food > 0) {
+				// Apples gained. Those from the food bank are tracked separately
+				// so re-donating them cannot be claimed as fresh charity.
+				if (fromFoodBank) {
+					userUpdatePayload.charityFood = increment(data.food);
+				} else {
+					userUpdatePayload.food = increment(data.food);
+				}
+			} else {
+				// Apples spent: charity apples are consumed first.
+				const foodCost = -data.food;
+				const charityAvailable = Math.max(snapshot.charityFood ?? 0, 0);
+				const charitySpent = Math.min(charityAvailable, foodCost);
+				const ownSpent = foodCost - charitySpent;
+				if (fromFoodBank) {
+					falseCharity += charitySpent;
+				}
+				if (charitySpent > 0) {
+					userUpdatePayload.charityFood = increment(-charitySpent);
+				}
+				if (ownSpent > 0) {
+					userUpdatePayload.food = increment(-ownSpent);
+				}
 			}
-			// apply computed reductions
-			userUpdatePayload.charityFood = increment(- charityFoodCost);
-			userUpdatePayload.food = increment(- foodCost);
 		}
 
 		// when updating charity
@@ -223,6 +249,21 @@ export default function Scanner({ setChecked, snapshot, id }) {
 		} catch (e) {
 			openSnackbar(e.toString());
 		}
+	}
+
+	// The camera API only exists in a secure context. https:// and localhost
+	// qualify; a plain http:// LAN address such as http://192.168.x.x:3000 does
+	// not, and the QR library then silently does nothing. Say so instead.
+	const cameraAvailable =
+		typeof navigator !== 'undefined' && !!navigator.mediaDevices;
+
+	if (!cameraAvailable) {
+		return (
+			<Alert severity="error" sx={{ width: '100%' }}>
+				Camera unavailable. The scanner needs a secure connection - open the
+				https:// address of the site rather than an http:// LAN address.
+			</Alert>
+		);
 	}
 
 	return (

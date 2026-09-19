@@ -8,7 +8,6 @@ const Government = ({ setFormData }) => {
   const [result, setResult] = useState(-1);
 
   const roles = ['Stimulus'];
-  const StimulusID = roles.indexOf('Stimulus');
 
 
   const handleTypeChange = e => {

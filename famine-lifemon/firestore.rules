@@ -1,0 +1,71 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Upper bounds only, deliberately generous.
+    //
+    // An earlier version of this enforced `>= 0` on every stat and capped
+    // education at 3. That was wrong: the game legitimately drives `food`
+    // negative, because Scanner.js checks affordability against the `food`
+    // field while Stats.js displays `food + charityFood`. Live data from a
+    // previous event contains food -166, happiness -1, charityFood -21 and
+    // education 4. Those lower bounds rejected almost every scan and would
+    // have permanently frozen any account already holding such a value.
+    //
+    // What is left still stops someone writing themselves a fortune, which is
+    // the only thing rules can meaningfully prevent here - the JWT secret
+    // ships in the bundle, so forging a plausible QR is always possible.
+    function sane(d) {
+      return d.money is number       && d.money <= 1000000
+          && d.food is number        && d.food <= 10000
+          && d.charityFood is number && d.charityFood <= 10000
+          && d.happiness is number   && d.happiness <= 10000
+          && d.charity is number     && d.charity <= 100000
+          && d.education is number   && d.education <= 10
+          && d.group is number       && d.group >= 1 && d.group <= 10;
+    }
+
+    match /users/{userId} {
+      // The Result page aggregates every user, so reads span the collection.
+      allow read: if signedIn();
+
+      allow create: if signedIn()
+                    && request.resource.data.owner == request.auth.uid
+                    && sane(request.resource.data);
+
+      // Any signed-in client may update any user doc. This is deliberate: the
+      // owner check broke the recovery link, because restoring an account on a
+      // second device produces a different anonymous uid. The trade-off is that
+      // one participant can edit another's stats. Name, group and the stat
+      // bounds are still enforced.
+      allow update: if signedIn()
+                    && request.resource.data.name == resource.data.name
+                    && request.resource.data.group == resource.data.group
+                    && sane(request.resource.data);
+
+      allow delete: if false;
+    }
+
+    // stock/apple is seeded by hand in the console; the app only adjusts it.
+    match /stock/{item} {
+      allow read: if signedIn();
+      allow update: if signedIn()
+                    && request.resource.data.amount is int
+                    && request.resource.data.amount >= 0;
+      allow create, delete: if false;
+    }
+
+    // Shared between two participants, so it cannot be owner-scoped.
+    // Also holds marriages/counter, which Church.js increments.
+    match /marriages/{marriageId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn();
+      allow delete: if false;
+    }
+  }
+}

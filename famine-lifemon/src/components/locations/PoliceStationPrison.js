@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 
 import LocationRenderer from './LocationRenderer';
-import { SecondaryLevel, UniversityLevel } from './School';
+import { UniversityLevel } from './School';
 
 const PoliceStationPrison = ({ setFormData }) => {
   const [type, setType] = useState(-1);

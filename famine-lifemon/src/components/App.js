@@ -5,7 +5,8 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 
 import { helperPath } from './secret/Secret';
 import { doc, getDoc } from 'firebase/firestore';
-import { db } from '../database/firebase';
+import { useAuthState } from 'react-firebase-hooks/auth';
+import { db, auth } from '../database/firebase';
 import Passport from './Passport';
 import Layout from './Layout';
 import NewUser from './NewUser';
@@ -49,10 +50,14 @@ function useLocalStorage(key, initialValue) {
 
 export default function App() {
 	const [id, setId] = useLocalStorage("id", null);
+	// Firestore rules require request.auth, so nothing may run until the
+	// anonymous sign-in kicked off in database/firebase.js has resolved.
+	const [user, authLoading, authError] = useAuthState(auth);
 
   // If the app is opened at root and URL has an ?id=... param, check if that
   // id exists in the users collection and, if so, set it in localStorage.
   useEffect(() => {
+    if (!user) return; // reads are denied until signed in
     try {
       const params = new URLSearchParams(window.location.search);
       const idParam = params.get('id');
@@ -92,7 +97,18 @@ export default function App() {
     } catch (e) {
       console.log('error parsing search params', e);
     }
-  }, [id, setId]);
+  }, [id, setId, user]);
+
+	if (authLoading) {
+		return <p style={{ textAlign: 'center' }}>Connecting...</p>;
+	}
+	if (authError || !user) {
+		return (
+			<p style={{ textAlign: 'center' }}>
+				Could not connect. Check your network and reload.
+			</p>
+		);
+	}
 
 	return (
 		<BrowserRouter>

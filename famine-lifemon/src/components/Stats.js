@@ -5,6 +5,8 @@ import Typography from '@mui/material/Typography';
 import { Grid, Paper } from '@mui/material';
 import { ThemeProvider,createTheme } from '@mui/material/styles';
 
+import { repeatSymbol } from '../utils/display';
+
 export default function Stats({ snapshot, loading, showCharity }) {
 	const theme_2 = createTheme({
 		typography: {
@@ -67,7 +69,7 @@ export default function Stats({ snapshot, loading, showCharity }) {
 					</Grid>
 					<Grid item xs={8}>
 						<Typography variant="body2">
-							{loading ? "Loading..." : foodSymbol.repeat(snapshot?.food+snapshot?.charityFood)}
+							{loading ? "Loading..." : repeatSymbol(foodSymbol, (snapshot?.food ?? 0) + (snapshot?.charityFood ?? 0))}
 						</Typography>
 					</Grid>
 					<Grid item xs={3}>
@@ -79,7 +81,7 @@ export default function Stats({ snapshot, loading, showCharity }) {
 					</Grid>
 					<Grid item xs={8}>
 						<Typography variant="body2">
-							{loading ? "Loading..." : happySymbol.repeat(snapshot?.happiness)}
+							{loading ? "Loading..." : repeatSymbol(happySymbol, snapshot?.happiness)}
 						</Typography>
 					</Grid>
 					<Grid item xs={3}>
@@ -91,7 +93,7 @@ export default function Stats({ snapshot, loading, showCharity }) {
 					</Grid>
 					<Grid item xs={8}>
 						<Typography variant="body2" display={loading ? 'none' : showCharity ? 'display' : 'none'}>
-							{loading ? "Loading..." : charitySymbol.repeat(snapshot?.charity)}
+							{loading ? "Loading..." : repeatSymbol(charitySymbol, snapshot?.charity)}
 						</Typography>
 					</Grid>
 					<Grid item xs={12}>
@@ -111,7 +113,7 @@ export default function Stats({ snapshot, loading, showCharity }) {
 					</Grid>
 					<Grid item xs={7}>
 						<Typography variant="body2" color="#ffffff" fontWeight='bold' style={{textTransform: 'uppercase'}} >
-							{loading ? "Loading..." : educationMap[snapshot?.education]}
+							{loading ? "Loading..." : (educationMap[snapshot?.education] ?? "Unknown")}
 						</Typography>
 					</Grid>
 					<Grid item xs={4}>

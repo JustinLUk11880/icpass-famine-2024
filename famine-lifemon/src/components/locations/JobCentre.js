@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 
 import LocationRenderer from './LocationRenderer';
-import { PrimaryLevel, SecondaryLevel, UniversityLevel, GraduateLevel } from './School';
+import { PrimaryLevel } from './School';
 
 const JobCentre = ({ setFormData }) => {
     const [type, setType] = useState(-1);

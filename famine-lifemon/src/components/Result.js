@@ -2,73 +2,88 @@ import React, { useEffect, useState } from 'react';
 import { Paper } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import { db } from '../database/firebase';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, getDocs } from 'firebase/firestore';
 
-const charitySymbol = "🔥";
-const happySymbol = "😄";
+import { repeatSymbol, perMember } from '../utils/display';
 
-// marriageBonus: query the `marriages` collection for documents containing this user
-// and return 1000 if any active marriage (hasDivorced === false) exists, otherwise 0
-const marriageBonus = async (userId) => {
-  if (!userId) return 0;
+const charitySymbol = "\u{1F525}";
+const happySymbol = "\u{1F604}";
+
+const NUM_GROUPS = 10;
+const MARRIAGE_BONUS = 1000;
+
+// One read of the whole marriages collection, turned into
+// userId -> number of marriages that were never dissolved.
+// This used to be a per-user query inside the loop, which meant one round trip
+// per participant - over 200 of them, run serially.
+const buildMarriageCounts = async () => {
+  const counts = new Map();
   try {
-    const q = query(collection(db, 'marriages'), where('participants', 'array-contains', userId));
-    const snap = await getDocs(q);
-    let stableMarriages = 0;
+    const snap = await getDocs(collection(db, 'marriages'));
     for (const d of snap.docs) {
       const m = d.data();
-      if (!m.hasDivorced) stableMarriages++;
+      // marriages/counter is a bookkeeping doc with no participants
+      if (m.hasDivorced || !Array.isArray(m.participants)) continue;
+      for (const uid of m.participants) {
+        counts.set(uid, (counts.get(uid) || 0) + 1);
+      }
     }
-    return stableMarriages * 1000;
   } catch (e) {
-    console.error('marriageBonus error', e);
-    return 0;
+    console.error('Could not read marriages; bonuses will be 0.', e);
   }
-}
+  return counts;
+};
 
-const renderRows = (rows) => {
-  return rows.map(row => {
-    return {
-      id: row.id,
-      happiness: happySymbol.repeat(Math.floor(row.happiness / row.numMembers) || 0),
-      charity: charitySymbol.repeat(Math.floor(row.charity / row.numMembers) || 0),
-      total: Math.floor((row.charity * 30 + row.money * 20 + row.food * 20 + row.happiness * 30) / row.numMembers || 0),
-    };
-  });
-}
+const renderRows = (groups) => groups.map(g => ({
+  id: g.id,
+  happiness: repeatSymbol(happySymbol, perMember(g.happiness, g.numMembers)),
+  charity: repeatSymbol(charitySymbol, perMember(g.charity, g.numMembers)),
+  total: perMember(
+    g.charity * 30 + g.money * 20 + g.food * 20 + g.happiness * 30,
+    g.numMembers
+  ),
+}));
 
 const Result = () => {
   const [rows, setRows] = useState([]);
 
   useEffect(() => {
     const calcGroupTotal = async () => {
-      const usersSnapshot = await getDocs(collection(db, 'users'));
-      const groups = [...Array(10).keys()].map(i => {
-        return {
-          id: i + 1,
-          numMembers: 0,
-          happiness: 0,
-          money: 0,
-          food: 0,
-          charity: 0,
-        };
-      });
-      // iterate serially so we can await DB checks per user
+      const [usersSnapshot, marriageCounts] = await Promise.all([
+        getDocs(collection(db, 'users')),
+        buildMarriageCounts(),
+      ]);
+
+      const groups = Array.from({ length: NUM_GROUPS }, (_, i) => ({
+        id: i + 1,
+        numMembers: 0,
+        happiness: 0,
+        money: 0,
+        food: 0,
+        charity: 0,
+      }));
+
       for (const docSnap of usersSnapshot.docs) {
         const data = docSnap.data();
-        const userId = docSnap.id;
-        const group = data.group - 1;
-        groups[group].numMembers++;
-        groups[group].happiness += data.happiness;
-        // compute marriage bonus by consulting marriages collection
-        const bonus = await marriageBonus(userId);
-        groups[group].money += (data.money || 0) + bonus;
-        groups[group].food += (data.food || 0) + (data.charityFood || 0);
-        groups[group].charity += (data.charity || 0);
+        const index = Number(data.group) - 1;
+        // A document with a missing or out-of-range group used to index the
+        // array with undefined and crash the whole scoreboard.
+        if (!Number.isInteger(index) || index < 0 || index >= NUM_GROUPS) {
+          console.warn(`Skipping user ${docSnap.id}: bad group ${JSON.stringify(data.group)}`);
+          continue;
+        }
+        const g = groups[index];
+        g.numMembers += 1;
+        g.happiness += Number(data.happiness) || 0;
+        g.money += (Number(data.money) || 0)
+                 + (marriageCounts.get(docSnap.id) || 0) * MARRIAGE_BONUS;
+        g.food += (Number(data.food) || 0) + (Number(data.charityFood) || 0);
+        g.charity += Number(data.charity) || 0;
       }
+
       setRows(renderRows(groups));
-    }
-    calcGroupTotal();
+    };
+    calcGroupTotal().catch(e => console.error('Scoreboard failed to load', e));
   }, []);
 
   return (

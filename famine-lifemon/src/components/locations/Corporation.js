@@ -13,7 +13,6 @@ const Corporation = ({ setFormData }) => {
 
   const results = ['Winner', 'Loser'];
   const WinnerID = results.indexOf('Winner');
-  const LoserID = results.indexOf('Loser');
 
   const handleTypeChange = e => {
     const value = Number(e.target.value);

@@ -1,8 +1,16 @@
-famine-lifemon/.firebaserc
-famine-lifemon/firebase.json
-famine-lifemon/firestore.indexes.json
-famine-lifemon/firestore.rules
-famine-lifemon/.firebase/hosting.cHVibGlj.cache
-famine-lifemon/public/404.html
 node_modules
-*package*.json
+
+# Firebase CLI deploy cache - regenerated on every deploy, machine-specific.
+famine-lifemon/.firebase/
+
+# Deliberately NOT ignored, despite firebase init offering to:
+#   firebase.json          - hosting + rules config, needed to deploy
+#   firestore.rules        - the security rules ARE source code, review them in PRs
+#   firestore.indexes.json - index definitions
+#   .firebaserc            - project aliases; ids are not secrets
+#
+# Also removed: "*package*.json". That pattern excluded package.json and
+# package-lock.json, i.e. the dependency manifest and the lockfile. The existing
+# ones stayed tracked only because git keeps already-tracked files, but any new
+# package.json (a functions/ directory, for example) would have vanished
+# silently.

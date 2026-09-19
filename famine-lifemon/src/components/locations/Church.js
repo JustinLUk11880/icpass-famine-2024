@@ -1,6 +1,5 @@
 import React, { useState } from 'react'
 
-import { MenuItem } from '@mui/material';
 import LocationRenderer from './LocationRenderer';
 import { doc, runTransaction } from 'firebase/firestore';
 import { db } from '../../database/firebase';
@@ -10,7 +9,6 @@ const Church = ({ setFormData }) => {
 
   const options = ['Marriage', 'Divorce'];
   const MarriageID = options.indexOf('Marriage');
-  const DivorceID = options.indexOf('Divorce');
 
   const handleTypeChange = async e => {
     const value = Number(e.target.value);

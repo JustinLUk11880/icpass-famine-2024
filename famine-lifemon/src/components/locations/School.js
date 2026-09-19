@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react'
 
-import { MenuItem } from '@mui/material';
 import LocationRenderer from './LocationRenderer';
 import { useCallback } from 'react';
 
@@ -122,7 +121,6 @@ function useTeachingOption(setFormData) {
 const School = ({ setFormData }) => {
   const roles = ['School', 'Teacher'];
   const SchoolRoleID = roles.indexOf('School');
-  const TeacherID = roles.indexOf('Teacher');
 
   const [type, setType] = useState(SchoolRoleID);
 

@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 
 import LocationRenderer from './LocationRenderer';
-import { PrimaryLevel, SecondaryLevel, UniversityLevel, GraduateLevel } from './School';
+import { UniversityLevel, GraduateLevel } from './School';
 
 const Hospital = ({ setFormData }) => {
   const [isNurse, setIsNurse] = useState(null);

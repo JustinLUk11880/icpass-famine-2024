@@ -7,49 +7,51 @@ import './index.css';
 import App from './components/App';
 import ErrorBoundary from './components/ErrorBoundary';
 
-// If a fatal error happens before React renders, we mount a minimal React
-// tree that displays the ErrorBoundary fallback. This prevents a white screen.
+const rootEl = document.getElementById('root');
+
+// Last-resort UI for an error thrown before React ever mounts. This must never
+// run against an app that is already on screen - see the note below.
 function mountErrorUI(initialError) {
 	try {
 		ReactDOM.render(
 			<ErrorBoundary initialError={initialError}>
 				<div />
 			</ErrorBoundary>,
-			document.getElementById('root')
+			rootEl
 		);
 	} catch (e) {
-		// If even this fails, fall back to a minimal DOM update so user sees something
-		const root = document.getElementById('root');
-		if (root) {
-			root.innerHTML = '<div style="padding:20px;font-family:sans-serif"><h1>Something went wrong</h1><p>An unexpected error occurred.</p></div>';
+		if (rootEl) {
+			rootEl.innerHTML =
+				'<div style="padding:20px;font-family:sans-serif">' +
+				'<h1>Something went wrong</h1><p>An unexpected error occurred.</p></div>';
 		}
 	}
 }
 
-// Global error handlers to catch fatal errors that would otherwise show a white screen
+// These handlers LOG ONLY. They used to call mountErrorUI, which replaced the
+// whole running app: closing the QR scanner fires a resource `error` event on
+// the torn-down <video> element, and that event carries neither .error nor
+// .message, so ErrorBoundary rendered with hasError=false - an empty <div>,
+// i.e. a blank page that only a reload cleared. Runtime errors inside React
+// are already handled by the ErrorBoundary wrapping <App />.
 if (typeof window !== 'undefined') {
 	window.addEventListener('error', (event) => {
-		try {
-			console.error('Global error caught', event.error || event.message, event);
-			mountErrorUI(event.error || event.message);
-		} catch (e) {
-			// ignore
-		}
+		console.error('Global error caught', event.error || event.message, event);
 	});
 
 	window.addEventListener('unhandledrejection', (event) => {
-		try {
-			console.error('Unhandled promise rejection', event.reason, event);
-			mountErrorUI(event.reason || 'Unhandled promise rejection');
-		} catch (e) {
-			// ignore
-		}
+		console.error('Unhandled promise rejection', event.reason, event);
 	});
 }
 
-ReactDOM.render(
-	<ErrorBoundary>
-		<App />
-	</ErrorBoundary>,
-	document.getElementById('root')
-);
+try {
+	ReactDOM.render(
+		<ErrorBoundary>
+			<App />
+		</ErrorBoundary>,
+		rootEl
+	);
+} catch (e) {
+	// A throw during the very first render, before ErrorBoundary can catch it.
+	mountErrorUI(e);
+}
