@@ -1,126 +1,120 @@
-import * as React from 'react';
+import React, { useEffect, useState } from 'react';
+import { Box, Chip, Paper, Stack, Typography } from '@mui/material';
+import { ThemeProvider, createTheme } from '@mui/material/styles';
 
+import { APPLE_MAX, EDU, EDUCATION_LABELS, MINUTE } from '../game/catalog.js';
 
-import Typography from '@mui/material/Typography';
-import { Grid, Paper } from '@mui/material';
-import { ThemeProvider,createTheme } from '@mui/material/styles';
+const theme = createTheme({ typography: { fontFamily: 'Karla, sans-serif' } });
 
-import { repeatSymbol } from '../utils/display';
+const FOOD_DELIVERY_COOLDOWN = 20 * MINUTE;
 
-export default function Stats({ snapshot, loading, showCharity, groupId }) {
-	const theme_2 = createTheme({
-		typography: {
-			fontFamily:'Karla'
-		}
-	});
-	const happySymbol = "😄";
-	const foodSymbol = "🍎️";
-	const charitySymbol = "🔥";
-	const educationMap = ["Primary", "Secondary", "University", "Graduate"];
+function Row({ label, children }) {
 	return (
-		<>
-		<ThemeProvider theme = {theme_2}>
-			<Paper elevation={6} style={{ background: 'linear-gradient(45deg, #FFE078 10%, #FFC14F 100%)' }} >
-				<Grid container spacing={0.5} fontSize={16} style={{ justifyContent: "flex-end", alignItems: "center" }}>
-					<Grid item xs={12}>
-					</Grid>
-					<Grid item xs={3}>
-						<Typography variant="body2" fontWeight='medium' color="#111A2D"
-							fontSize={13}
-							>
-							Group
-						</Typography>
-					</Grid>
-					<Grid item xs={8}>
-						<Typography variant="body2" fontWeight='bold' color="#111A2D" fontSize={14} style={{textTransform: 'uppercase'}} >
-							{"Group " + (groupId ?? snapshot?.group ?? "?")}
-						</Typography>
-					</Grid>
-					<Grid item xs={3}>
-						<Typography variant="body2"fontWeight='medium' color="#111A2D"
-							fontSize={13}
-							>
-							Asset
-						</Typography>
-					</Grid>
-					<Grid item xs={8}>
-						<Typography variant="body2" fontWeight='bold' color="#111A2D" fontSize={14}>
-							{loading ? "Loading..." : "$" + snapshot?.money}
-						</Typography>
-					</Grid>
-					<Grid item xs={3}>
-						<Typography variant="body2"fontWeight='medium' color="#111A2D"
-							fontSize={13}
-							>
-							Food
-						</Typography>
-					</Grid>
-					<Grid item xs={8}>
-						<Typography variant="body2">
-							{loading ? "Loading..." : repeatSymbol(foodSymbol, (snapshot?.food ?? 0) + (snapshot?.charityFood ?? 0))}
-						</Typography>
-					</Grid>
-					<Grid item xs={3}>
-						<Typography variant="body2"fontWeight='medium' color="#111A2D"
-							fontSize={13}
-							>
-							Happiness
-						</Typography>
-					</Grid>
-					<Grid item xs={8}>
-						<Typography variant="body2">
-							{loading ? "Loading..." : repeatSymbol(happySymbol, snapshot?.happiness)}
-						</Typography>
-					</Grid>
-					<Grid item xs={3}>
-						<Typography variant="body2" fontWeight='medium' color="#111A2D"
-							fontSize={13} display={loading ? 'none' : showCharity ? 'display' : 'none'}
-						>
-							Charity
-						</Typography>
-					</Grid>
-					<Grid item xs={8}>
-						<Typography variant="body2" display={loading ? 'none' : showCharity ? 'display' : 'none'}>
-							{loading ? "Loading..." : repeatSymbol(charitySymbol, snapshot?.charity)}
-						</Typography>
-					</Grid>
-					<Grid item xs={12}>
-					</Grid>
-				</Grid>
+		<Box sx={{ display: 'flex', alignItems: 'center', py: 0.6, gap: 1.5 }}>
+			<Typography sx={{ width: 92, flexShrink: 0, fontSize: 13, fontWeight: 500, color: '#111A2D' }}>
+				{label}
+			</Typography>
+			<Box sx={{ flex: 1, minWidth: 0 }}>{children}</Box>
+		</Box>
+	);
+}
+
+// Apples are capped at 8, so they read best as eight slots.
+function Apples({ count }) {
+	const n = Math.max(0, Math.min(APPLE_MAX, Math.floor(Number(count) || 0)));
+	return (
+		<Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, flexWrap: 'wrap' }}>
+			{Array.from({ length: APPLE_MAX }, (_, i) => (
+				<span key={i} style={{ fontSize: 18, opacity: i < n ? 1 : 0.18, filter: i < n ? 'none' : 'grayscale(1)' }}>
+					🍎
+				</span>
+			))}
+			<Typography component="span" sx={{ ml: 0.75, fontSize: 13, fontWeight: 700, color: '#111A2D' }}>
+				{n}/{APPLE_MAX}
+			</Typography>
+		</Box>
+	);
+}
+
+// Re-renders every 30s so a cooldown counts down on screen.
+function useNow(intervalMs = 30000) {
+	const [now, setNow] = useState(Date.now());
+	useEffect(() => {
+		const id = setInterval(() => setNow(Date.now()), intervalMs);
+		return () => clearInterval(id);
+	}, [intervalMs]);
+	return now;
+}
+
+export default function Stats({ snapshot, loading, groupId }) {
+	const now = useNow();
+	const g = snapshot || {};
+	const value = (node) => (loading ? <Typography fontSize={14}>Loading...</Typography> : node);
+
+	const edu = Math.max(EDU.NONE, Math.min(EDU.PHD, Math.floor(Number(g.education) || 0)));
+	const lastDelivery = Number(g.cooldowns?.foodDelivery) || 0;
+	const deliveryWait = lastDelivery ? Math.ceil((FOOD_DELIVERY_COOLDOWN - (now - lastDelivery)) / MINUTE) : 0;
+
+	const chips = [];
+	if (edu === EDU.PHD) chips.push({ label: '⚡ PhD: line priority at every minigame', color: 'warning' });
+	if (g.gymMember) chips.push({ label: '🏋️ Gym member' });
+	if (g.raffleTickets > 0) chips.push({ label: `🎟 ${g.raffleTickets} raffle ticket${g.raffleTickets === 1 ? '' : 's'}` });
+	if (g.once?.teacher) chips.push({ label: '✓ Teacher pay received' });
+	if (g.once?.artist) chips.push({ label: '✓ Concert performed' });
+	if (deliveryWait > 0) chips.push({ label: `🛵 Food delivery again in ${deliveryWait} min` });
+
+	return (
+		<ThemeProvider theme={theme}>
+			<Paper elevation={6} sx={{ background: 'linear-gradient(45deg, #FFE078 10%, #FFC14F 100%)', px: 2, py: 1.5 }}>
+				<Typography sx={{ fontSize: 22, fontWeight: 800, color: '#111A2D', letterSpacing: 0.5, mb: 0.5 }}>
+					GROUP {groupId ?? g.group ?? '?'}
+				</Typography>
+				<Row label="Money">
+					{value(
+						<Typography sx={{ fontSize: 20, fontWeight: 800, color: '#111A2D' }}>
+							${Number(g.money || 0).toLocaleString('en-US')}
+						</Typography>,
+					)}
+				</Row>
+				<Row label="Apples">{value(<Apples count={g.food} />)}</Row>
+				<Row label="Happiness">
+					{value(
+						<Typography sx={{ fontSize: 17, fontWeight: 700, color: '#111A2D' }}>
+							😄 × {Math.max(0, Math.floor(Number(g.happiness) || 0))}
+						</Typography>,
+					)}
+				</Row>
 			</Paper>
-			<Paper elevation={6}  style={{ background: 'linear-gradient(45deg, #4FB2AA 10%, #3F8F89 100%)' }} >
-				<Grid container spacing={0.5} style={{ justifyContent: "flex-end", alignItems: "center" }}>
-					<Grid item xs={12}>
-					</Grid>
-					<Grid item xs={4}>
-						<Typography variant="body2" color="#ffffff" fontWeight='light'
-							fontSize={13}
-							>
-							Qualification
-						</Typography>
-					</Grid>
-					<Grid item xs={7}>
-						<Typography variant="body2" color="#ffffff" fontWeight='bold' style={{textTransform: 'uppercase'}} >
-							{loading ? "Loading..." : (educationMap[snapshot?.education] ?? "Unknown")}
-						</Typography>
-					</Grid>
-					<Grid item xs={4}>
-						<Typography variant="body2" color="#ffffff" fontWeight='light'
-							fontSize={13}
-						>	
-							Marital status
-						</Typography>
-					</Grid>
-					<Grid item xs={7}>
-						<Typography variant="body2" color="#ffffff" fontWeight='bold'>
-							{loading ? "Loading..." : snapshot?.married ? "MARRIED" : "SINGLE"}
-						</Typography>
-					</Grid>
-					<Grid item xs={12}>
-					</Grid>
-				</Grid>
+
+			<Paper elevation={6} sx={{ background: 'linear-gradient(45deg, #4FB2AA 10%, #3F8F89 100%)', px: 2, py: 1.5, color: '#fff' }}>
+				<Row label={<span style={{ color: '#fff', fontWeight: 300 }}>Qualification</span>}>
+					{value(
+						<Typography sx={{ fontSize: 15, fontWeight: 800, textTransform: 'uppercase', color: '#fff' }}>
+							🎓 {EDUCATION_LABELS[edu]}
+						</Typography>,
+					)}
+				</Row>
+				<Row label={<span style={{ color: '#fff', fontWeight: 300 }}>Marital status</span>}>
+					{value(
+						<Typography sx={{ fontSize: 15, fontWeight: 800, color: '#fff' }}>
+							{g.married ? '💍 MARRIED' : 'SINGLE'}
+						</Typography>,
+					)}
+				</Row>
+				{!loading && chips.length > 0 && (
+					<Stack direction="row" sx={{ flexWrap: 'wrap', gap: 0.75, mt: 1 }}>
+						{chips.map((c) => (
+							<Chip
+								key={c.label}
+								label={c.label}
+								size="small"
+								color={c.color || 'default'}
+								sx={c.color ? { fontWeight: 700 } : { bgcolor: 'rgba(255,255,255,0.9)', fontWeight: 600 }}
+							/>
+						))}
+					</Stack>
+				)}
 			</Paper>
 		</ThemeProvider>
-		</>
 	);
 }

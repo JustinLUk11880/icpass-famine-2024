@@ -2,12 +2,14 @@ import React, { useState } from 'react';
 import { Alert, Button, Paper, TextField, MenuItem, Typography } from '@mui/material';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import Grid from '@mui/material/Grid';
-import { doc, runTransaction } from 'firebase/firestore';
 
 import { db } from '../database/firebase';
-import { GROUPS, STARTING_STATS, isValidGroup } from '../constants';
+import { MAX_GROUPS } from '../game/catalog.js';
+import { isValidGroupId } from '../game/engine.js';
+import { joinGroup } from '../game/firestore.js';
 
 const theme = createTheme({ typography: { fontFamily: 'Ubuntu' } });
+const GROUPS = Array.from({ length: MAX_GROUPS }, (_, i) => i + 1);
 
 export default function JoinGroup({ setGroup }) {
   const [choice, setChoice] = useState('');
@@ -17,32 +19,24 @@ export default function JoinGroup({ setGroup }) {
   async function handleSubmit(e) {
     e.preventDefault();
     if (joining) return;
-    if (!isValidGroup(choice)) {
+    const id = String(choice);
+    if (!isValidGroupId(id)) {
       setError('Please choose a group.');
       return;
     }
-
     setJoining(true);
     setError(null);
-    const id = String(Number(choice));
-
     try {
-      // The group account is shared, so the first person to join creates it and
-      // everyone after simply attaches. A transaction makes that race safe: two
-      // phones joining at the same instant cannot both create it, and neither
-      // can reset stats that the other has already earned.
-      await runTransaction(db, async (tx) => {
-        const ref = doc(db, 'groups', id);
-        const snap = await tx.get(ref);
-        if (!snap.exists()) {
-          tx.set(ref, { ...STARTING_STATS, group: Number(id) });
-        }
-      });
+      // The first person in a group rolls its random starting profile; everyone
+      // after joins the same account. Safe if several phones join at once.
+      const res = await joinGroup(db, id);
+      if (!res.ok) throw new Error(res.reason);
+      // This screen unmounts as soon as the group is set, so no state may be
+      // touched after this line.
       setGroup(id);
     } catch (err) {
       console.error('Could not join group', err);
       setError('Could not join. Check your connection and try again.');
-    } finally {
       setJoining(false);
     }
   }
@@ -55,18 +49,17 @@ export default function JoinGroup({ setGroup }) {
             <Grid item xs={8}>
               <Typography variant="body2" sx={{ maxWidth: '20em', textAlign: 'center' }}>
                 Choose your group. Everyone in the group shares one passport, so
-                every scan adds to the same score.
+                every scan counts for the whole group.
               </Typography>
             </Grid>
             <Grid item xs={8}>
               <TextField
                 required
                 id="group-select"
-                size="large"
                 value={choice}
                 label="Group"
                 onChange={(e) => setChoice(e.target.value)}
-                sx={{ width: '20em' }}
+                sx={{ width: '20em', maxWidth: '100%' }}
                 select
                 fullWidth
                 margin="dense"
@@ -77,13 +70,13 @@ export default function JoinGroup({ setGroup }) {
               </TextField>
             </Grid>
             <Grid item xs={8}>
-              <Button variant="contained" type="submit" sx={{ width: '20em' }} disabled={joining}>
+              <Button variant="contained" type="submit" sx={{ width: '20em', maxWidth: '100%' }} disabled={joining}>
                 {joining ? 'Joining...' : 'Join'}
               </Button>
             </Grid>
             {error && (
               <Grid item xs={8}>
-                <Alert severity="error" sx={{ width: '20em' }}>{error}</Alert>
+                <Alert severity="error" sx={{ width: '20em', maxWidth: '100%' }}>{error}</Alert>
               </Grid>
             )}
           </Grid>

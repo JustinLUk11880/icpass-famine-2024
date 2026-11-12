@@ -1,172 +1,166 @@
-import React from 'react';
-import { Box, Paper, Typography } from '@mui/material';
+import React, { useState } from 'react';
+import { Box, Paper, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import { collection } from 'firebase/firestore';
 import { useCollection } from 'react-firebase-hooks/firestore';
 
 import { db } from '../database/firebase';
-import { GROUPS, scoreOf } from '../constants';
+import { APPLE_MAX } from '../game/catalog.js';
+import { isValidGroupId } from '../game/engine.js';
 
-const charitySymbol = "\u{1F525}";
-const happySymbol = "\u{1F604}";
-const medals = { 1: "\u{1F947}", 2: "\u{1F948}", 3: "\u{1F949}" };
+const medals = { 1: '🥇', 2: '🥈', 3: '🥉' };
 
-// Counts run into the dozens by the end of an event, so one emoji followed by
-// a count stays readable where a repeated row of emoji does not.
-const countOf = (symbol, value) => {
-  const n = Number(value);
-  return `${symbol} × ${Number.isFinite(n) && n > 0 ? Math.floor(n) : 0}`;
-};
+// The three awards from the LifeMon rules. Each is ranked on its own stat;
+// there is no combined score.
+export const AWARDS = [
+  { key: 'money', title: 'Monopoly', subtitle: 'most money', icon: '💰' },
+  { key: 'happiness', title: 'Joy Master', subtitle: 'most happiness', icon: '😄' },
+  { key: 'food', title: 'Wellness King/Queen', subtitle: 'most health', icon: '🍎' },
+];
+
+const statOf = (g, key) => Math.max(0, Math.floor(Number(g?.[key]) || 0));
+
+// Ties share a rank: 1, 2, 2, 4.
+export function rankBy(groups, key) {
+  const sorted = [...groups].sort((a, b) => statOf(b, key) - statOf(a, key) || a.id - b.id);
+  const ranks = new Map();
+  let prev = null;
+  let rank = 0;
+  sorted.forEach((g, i) => {
+    const v = statOf(g, key);
+    if (v !== prev) {
+      rank = i + 1;
+      prev = v;
+    }
+    ranks.set(g.id, rank);
+  });
+  return { sorted, ranks };
+}
 
 export default function Result({ highlightGroup }) {
-  const [groupsSnap, groupsLoading, groupsError] = useCollection(collection(db, 'groups'));
-  const [marriagesSnap] = useCollection(collection(db, 'marriages'));
+  // Live: every scan by any group updates every phone showing this board.
+  const [snap, loading, error] = useCollection(collection(db, 'groups'));
+  const [awardKey, setAwardKey] = useState('money');
+  const award = AWARDS.find((a) => a.key === awardKey) || AWARDS[0];
 
-  // groupNumber -> marriages never dissolved
-  const intact = new Map();
-  if (marriagesSnap) {
-    for (const d of marriagesSnap.docs) {
-      const m = d.data();
-      if (m.hasDivorced || !Array.isArray(m.participants)) continue; // skips marriages/counter
-      for (const p of m.participants) {
-        const n = Number(p);
-        if (Number.isInteger(n)) intact.set(n, (intact.get(n) || 0) + 1);
-      }
-    }
-  }
+  // Only groups someone has joined. Raffle tickets are deliberately absent:
+  // groups must not learn how many tickets the others hold.
+  const groups = snap
+    ? snap.docs
+      .filter((d) => isValidGroupId(d.id))
+      .map((d) => {
+        const g = d.data();
+        return { id: Number(d.id), money: statOf(g, 'money'), happiness: statOf(g, 'happiness'), food: statOf(g, 'food') };
+      })
+    : [];
 
-  const byId = new Map();
-  if (groupsSnap) for (const d of groupsSnap.docs) byId.set(String(d.id), d.data());
-
-  const rows = GROUPS.map((n) => {
-    const g = byId.get(String(n)) || {};
-    return {
-      id: n,
-      charity: Math.max(Math.floor(Number(g.charity) || 0), 0),
-      happiness: Math.max(Math.floor(Number(g.happiness) || 0), 0),
-      total: scoreOf(g, intact.get(n) || 0),
-    };
-  });
-
-  rows.sort((a, b) => b.total - a.total || a.id - b.id);
-  let lastTotal = null;
-  let lastRank = 0;
-  rows.forEach((r, i) => {
-    if (r.total !== lastTotal) { lastRank = i + 1; lastTotal = r.total; }
-    r.rank = lastRank;
-  });
-
-  const mine = highlightGroup != null ? rows.find((r) => r.id === Number(highlightGroup)) : null;
   const isMine = (id) => highlightGroup != null && Number(id) === Number(highlightGroup);
+  const { sorted, ranks } = rankBy(groups, award.key);
+  const rows = sorted.map((g) => ({ ...g, rank: ranks.get(g.id) }));
+  const mine = groups.find((g) => isMine(g.id));
+  const myRanks = mine ? Object.fromEntries(AWARDS.map((a) => [a.key, rankBy(groups, a.key).ranks.get(mine.id)])) : null;
 
-  if (groupsError) {
+  if (error) {
     return <Typography sx={{ textAlign: 'center', py: 2 }}>Could not load the leaderboard.</Typography>;
   }
+
+  const statColumn = (key, headerName, render) => ({
+    field: key,
+    headerName,
+    flex: 1,
+    minWidth: 70,
+    sortable: false,
+    align: 'center',
+    headerAlign: 'center',
+    cellClassName: key === award.key ? 'col-active' : '',
+    headerClassName: key === award.key ? 'col-active-header' : '',
+    renderCell: ({ value }) => (
+      <Typography component="span" fontSize={14} fontWeight={key === award.key ? 800 : 500} sx={{ whiteSpace: 'nowrap' }}>
+        {render(value)}
+      </Typography>
+    ),
+  });
 
   const columns = [
     {
       field: 'rank',
       headerName: '#',
-      width: 58,
+      width: 52,
       sortable: false,
       align: 'center',
       headerAlign: 'center',
       renderCell: ({ value }) => (
-        <Typography component="span" fontWeight="bold" fontSize={15}>
-          {medals[value] || value}
-        </Typography>
+        <Typography component="span" fontWeight="bold" fontSize={15}>{medals[value] || value}</Typography>
       ),
     },
     {
       field: 'id',
       headerName: 'Group',
-      flex: 1.1,
-      minWidth: 78,
+      flex: 1,
+      minWidth: 74,
       sortable: false,
       renderCell: ({ value }) => (
-        <Typography component="span" fontSize={14} fontWeight={isMine(value) ? 800 : 500}>
-          Group {value}{isMine(value) ? ' (you)' : ''}
+        // "(you)" overflowed at phone width; the row is already tinted and
+        // the banner above names the group, so a star is enough.
+        <Typography component="span" fontSize={14} fontWeight={isMine(value) ? 800 : 500} sx={{ whiteSpace: 'nowrap' }}>
+          {isMine(value) ? '★ ' : ''}Group {value}
         </Typography>
       ),
     },
-    {
-      field: 'charity',
-      headerName: 'Charity',
-      flex: 1,
-      minWidth: 88,
-      sortable: false,
-      align: 'center',
-      headerAlign: 'center',
-      renderCell: ({ value }) => (
-        <Typography component="span" fontSize={14} sx={{ whiteSpace: 'nowrap' }}>
-          {countOf(charitySymbol, value)}
-        </Typography>
-      ),
-    },
-    {
-      field: 'happiness',
-      headerName: 'Happiness',
-      flex: 1,
-      minWidth: 100,
-      sortable: false,
-      align: 'center',
-      headerAlign: 'center',
-      renderCell: ({ value }) => (
-        <Typography component="span" fontSize={14} sx={{ whiteSpace: 'nowrap' }}>
-          {countOf(happySymbol, value)}
-        </Typography>
-      ),
-    },
-    {
-      field: 'total',
-      headerName: 'Score',
-      flex: 1,
-      minWidth: 84,
-      sortable: false,
-      align: 'right',
-      headerAlign: 'right',
-      renderCell: ({ value, row }) => (
-        <Typography component="span" fontSize={14} fontWeight={isMine(row.id) ? 800 : 600}>
-          {Number(value).toLocaleString()}
-        </Typography>
-      ),
-    },
+    statColumn('money', '💰 Money', (v) => `$${Number(v).toLocaleString('en-US')}`),
+    statColumn('happiness', '😄 Joy', (v) => `😄 × ${v}`),
+    statColumn('food', '🍎 Health', (v) => `${v}/${APPLE_MAX}`),
   ];
 
   return (
     <Box>
-      {mine && (
+      {mine && myRanks && (
         <Paper
           elevation={0}
           sx={{
             mb: 1.5, px: 2, py: 1.25, borderRadius: 2,
-            background: 'linear-gradient(135deg, #3F8F89 0%, #4FB2AA 100%)',
-            color: '#fff',
-            display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+            background: 'linear-gradient(135deg, #3F8F89 0%, #4FB2AA 100%)', color: '#fff',
           }}
         >
-          <Box>
-            <Typography fontSize={12} sx={{ opacity: 0.85, letterSpacing: 0.6 }}>
-              YOUR GROUP
-            </Typography>
-            <Typography fontSize={19} fontWeight={800} lineHeight={1.15}>
-              {medals[mine.rank] ? `${medals[mine.rank]} ` : ''}Rank {mine.rank} of {rows.length}
-            </Typography>
-          </Box>
-          <Box sx={{ textAlign: 'right' }}>
-            <Typography fontSize={12} sx={{ opacity: 0.85 }}>SCORE</Typography>
-            <Typography fontSize={19} fontWeight={800} lineHeight={1.15}>
-              {mine.total.toLocaleString()}
-            </Typography>
+          <Typography fontSize={12} sx={{ opacity: 0.85, letterSpacing: 0.6, mb: 0.5 }}>
+            YOUR GROUP · OUT OF {groups.length}
+          </Typography>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
+            {AWARDS.map((a) => (
+              <Box key={a.key} sx={{ textAlign: 'center', flex: 1 }}>
+                <Typography fontSize={20} fontWeight={800} lineHeight={1.15}>
+                  {medals[myRanks[a.key]] || `#${myRanks[a.key]}`}
+                </Typography>
+                <Typography fontSize={11} sx={{ opacity: 0.9 }}>{a.icon} {a.title}</Typography>
+              </Box>
+            ))}
           </Box>
         </Paper>
       )}
+
+      <ToggleButtonGroup
+        exclusive
+        fullWidth
+        size="small"
+        value={award.key}
+        onChange={(_, v) => v && setAwardKey(v)}
+        sx={{ mb: 1 }}
+      >
+        {AWARDS.map((a) => (
+          <ToggleButton key={a.key} value={a.key} sx={{ textTransform: 'none', lineHeight: 1.2, py: 0.75 }}>
+            <Box>
+              <Typography fontSize={13} fontWeight={700}>{a.icon} {a.title}</Typography>
+              <Typography fontSize={10} sx={{ opacity: 0.75 }}>{a.subtitle}</Typography>
+            </Box>
+          </ToggleButton>
+        ))}
+      </ToggleButtonGroup>
 
       <Paper elevation={2} sx={{ borderRadius: 2, overflow: 'hidden' }}>
         <DataGrid
           rows={rows}
           columns={columns}
-          loading={groupsLoading}
+          loading={loading}
           autoHeight
           density="compact"
           hideFooter
@@ -175,24 +169,26 @@ export default function Result({ highlightGroup }) {
           disableColumnFilter
           disableColumnSelector
           disableRowSelectionOnClick
+          localeText={{ noRowsLabel: 'No groups have joined yet' }}
           getRowClassName={({ id }) => (isMine(id) ? 'row-mine' : '')}
           sx={{
             border: 'none',
             fontFamily: 'Karla, sans-serif',
+            minHeight: 120,
             '& .MuiDataGrid-columnHeaders': {
               background: 'linear-gradient(45deg, #FFE078 10%, #FFC14F 100%)',
               borderBottom: '2px solid rgba(0,0,0,0.12)',
             },
-            '& .MuiDataGrid-columnHeaderTitle': {
-              fontWeight: 700, fontSize: 12, letterSpacing: 0.5, textTransform: 'uppercase',
-            },
+            '& .MuiDataGrid-columnHeaderTitle': { fontWeight: 700, fontSize: 12, letterSpacing: 0.3 },
+            '& .col-active-header .MuiDataGrid-columnHeaderTitle': { fontWeight: 900, textDecoration: 'underline' },
+            '& .col-active': { backgroundColor: 'rgba(255,193,79,0.14)' },
             '& .MuiDataGrid-columnSeparator': { display: 'none' },
             '& .MuiDataGrid-cell': { borderBottom: '1px solid rgba(0,0,0,0.06)' },
             '& .MuiDataGrid-cell:focus, & .MuiDataGrid-cell:focus-within': { outline: 'none' },
             '& .MuiDataGrid-row:hover': { backgroundColor: 'rgba(79,178,170,0.08)' },
             '& .row-mine': {
-              backgroundColor: 'rgba(79,178,170,0.20)',
-              '&:hover': { backgroundColor: 'rgba(79,178,170,0.28)' },
+              backgroundColor: 'rgba(79,178,170,0.22)',
+              '&:hover': { backgroundColor: 'rgba(79,178,170,0.30)' },
             },
           }}
         />

@@ -33,7 +33,9 @@
     "start": "cross-env NODE_OPTIONS=--openssl-legacy-provider react-scripts start",
     "build": "cross-env NODE_OPTIONS=--openssl-legacy-provider react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "test:game": "node --no-warnings --test tests/engine.test.mjs",
+    "test:live": "node --no-warnings --test --test-timeout=600000 tests/live.firestore.mjs"
   },
   "eslintConfig": {
     "extends": [

@@ -1,5 +1,14 @@
 rules_version = '2';
 
+// LifeMon. The game rules live in src/game/engine.js and run inside client
+// transactions; these rules are the server-side backstop for the invariants
+// that must never break, whatever a client sends.
+//
+// The QR signing secret ships in the JS bundle, so a determined player can
+// always forge a plausible scan. These rules cannot prevent that; they stop
+// impossible states (negative stats, more than 8 apples, a degree above PhD)
+// from ever being stored.
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -7,78 +16,63 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Upper bounds only, deliberately generous.
-    //
-    // An earlier version of this enforced `>= 0` on every stat and capped
-    // education at 3. That was wrong: the game legitimately drives `food`
-    // negative, because Scanner.js checks affordability against the `food`
-    // field while Stats.js displays `food + charityFood`. Live data from a
-    // previous event contains food -166, happiness -1, charityFood -21 and
-    // education 4. Those lower bounds rejected almost every scan and would
-    // have permanently frozen any account already holding such a value.
-    //
-    // What is left still stops someone writing themselves a fortune, which is
-    // the only thing rules can meaningfully prevent here - the JWT secret
-    // ships in the bundle, so forging a plausible QR is always possible.
-    function sane(d) {
-      return d.money is number       && d.money <= 1000000
-          && d.food is number        && d.food <= 10000
-          && d.charityFood is number && d.charityFood <= 10000
-          && d.happiness is number   && d.happiness <= 10000
-          && d.charity is number     && d.charity <= 100000
-          && d.education is number   && d.education <= 10;
-    }
-
-    // One shared account per group; the document id IS the group number, so a
-    // group cannot end up with two accounts. There is no per-user ownership by
-    // design - everyone in the group writes to the same document.
+    // Groups 1 to 20, spelled exactly: no "03", no " 3".
     function validGroupId(id) {
-      return id in ['1','2','3','4','5','6','7','8','9','10'];
+      return id.matches('^([1-9]|1[0-9]|20)$');
     }
 
-    // Groups start clean, so unlike the legacy users collection they can carry a
-    // hard floor of zero. This is the server-side backstop behind the
-    // transaction in Scanner.js: even a forged QR, a stale client or a bug
-    // cannot persist a negative stat, because Firestore refuses the write.
-    function nonNegative(d) {
-      return d.money >= 0
-          && d.food >= 0
-          && d.charityFood >= 0
-          && d.happiness >= 0
-          && d.charity >= 0
-          && d.education >= 0;
+    function validGroup(d) {
+      return d.money is number     && d.money >= 0     && d.money <= 100000000
+          && d.food is number      && d.food >= 0      && d.food <= 8
+          && d.happiness is number && d.happiness >= 0 && d.happiness <= 1000000
+          && d.education is number && d.education >= 0 && d.education <= 4;
     }
 
+    // One shared account per group; everyone in the group writes to it.
+    // Deletes are allowed so the helper page can reset the game.
     match /groups/{groupId} {
       allow read: if signedIn();
-      allow create: if signedIn() && validGroupId(groupId)
-                    && sane(request.resource.data) && nonNegative(request.resource.data);
-      allow update: if signedIn() && validGroupId(groupId)
-                    && sane(request.resource.data) && nonNegative(request.resource.data);
-      allow delete: if false;
+      allow create, update: if signedIn() && validGroupId(groupId) && validGroup(request.resource.data);
+      allow delete: if signedIn();
     }
 
-    // Retained read-only: the 2024 per-person records are history now.
+    // One record per (QR code, group) - this is what makes each QR usable
+    // once per group - plus global-event and manual-adjustment records.
+    // Never edited after the fact; doubles as the activity log.
+    match /redemptions/{id} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.groupId is string;
+      allow update: if false;
+      allow delete: if signedIn();
+    }
+
+    // Event-wide limits (PhD 2, assassin 1, Final Will 1).
+    match /limits/{key} {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+                            && request.resource.data.holders is list
+                            && request.resource.data.holders.size() <= 20;
+      allow delete: if signedIn();
+    }
+
+    // A marriage is between at most two groups.
+    match /marriages/{id} {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+                            && request.resource.data.participants is list
+                            && request.resource.data.participants.size() <= 2;
+      allow delete: if signedIn();
+    }
+
+    // The banner pushed to every phone from the helper page.
+    match /announcements/{id} {
+      allow read, write: if signedIn();
+    }
+
+    // 2024 per-person records, kept as history.
     match /users/{userId} {
       allow read: if signedIn();
       allow write: if false;
-    }
-
-    // stock/apple is seeded by hand in the console; the app only adjusts it.
-    match /stock/{item} {
-      allow read: if signedIn();
-      allow update: if signedIn()
-                    && request.resource.data.amount is int
-                    && request.resource.data.amount >= 0;
-      allow create, delete: if false;
-    }
-
-    // Shared between two participants, so it cannot be owner-scoped.
-    // Also holds marriages/counter, which Church.js increments.
-    match /marriages/{marriageId} {
-      allow read: if signedIn();
-      allow create, update: if signedIn();
-      allow delete: if false;
     }
   }
 }

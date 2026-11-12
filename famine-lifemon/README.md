@@ -1,70 +1,90 @@
-# Getting Started with Create React App
+# LifeMon passport
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+Web app for the Famine24 LifeMon game. Each group shares one passport. Helpers
+at each station make a QR code; any member of the group scans it and the
+group's money, apples, happiness and degree update on every member's phone at
+once.
 
-## Available Scripts
+Live site: https://famine-ace23.web.app · helper page: `/helper` · scoreboard: `/result`
 
-In the project directory, you can run:
+## First-time setup
 
-### `npm start`
+Two files are gitignored and must be created from their templates:
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+```bash
+cp src/database/firebase.example.js src/database/firebase.js          # paste your Firebase web config
+cp src/components/secret/Secret.example.js src/components/secret/Secret.js  # set a secret
+```
 
-The page will reload if you make edits.\
-You will also see any lint errors in the console.
+In the Firebase console, enable **Authentication → Sign-in method → Anonymous**.
 
-### `npm test`
+## Commands
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+| Command | What it does |
+|---|---|
+| `npm start` | Dev server on http://localhost:3000 |
+| `npm run build` | Production build into `build/` |
+| `npm run test:game` | Rules-engine tests: every number in the rules document, plus a 200k-scan fuzz. Safe, offline. |
+| `npm run test:live` | Tests against the real Firestore project: concurrency, limits, rules, load. **Resets the game - never run during an event.** |
+| `firebase deploy --only hosting,firestore:rules` | Publish the site and the security rules |
 
-### `npm run build`
+## Running the event
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+**Before the event:** on `/helper` → Groups, press *Reset game*. Optionally
+*Create groups in advance* to roll every group's random starting profile now.
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+**Joining:** each participant opens the site and picks their group. The first
+member to join rolls the group's starting profile, per the rules: 0–3 apples,
+5 happiness, $100–300 and a degree (none 50% / Primary 30% / Secondary 20%).
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+**At a station:** on `/helper` → Station QR, choose the stage and station,
+then fill in the result. The QR only appears once every choice is made, and
+the page shows what the group will get and what they need. **Each group can
+scan a QR code once** - press *New QR for the next group* when the same group
+comes back (gym sets, another police shift). Codes expire after 2 minutes.
 
-### `npm run eject`
+**Live events tab:** send an announcement to every phone (e.g. when the
+robbery starts), and apply *Pandemic Pass-26* or the *ICPASS Tax* to every
+group. Each group is hit once even if the button is pressed twice.
 
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
+**Groups tab:** every group's stats, the PhD / assassin / Final Will places
+taken, *Fix a mistake / award a prize* (also how to pay raffle prizes), the
+raffle draw weighted by tickets, and a log of every scan.
 
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+## The rules, as implemented
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
+All game logic is in [`src/game/`](src/game): [`catalog.js`](src/game/catalog.js)
+lists every station, [`engine.js`](src/game/engine.js) applies them. Both are
+pure JavaScript shared by the app and the tests.
 
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
+- **Degrees:** No degree → Primary → Secondary → University → PhD. Each exam
+  needs the previous degree; Primary / Secondary / University jobs need that
+  degree. Exam fees are paid whether the group passes or fails.
+- **Apples are capped at 8.** Money and happiness have no cap.
+- **Costs vs penalties:** a group that cannot afford a cost (exam fee, sauna,
+  raffle, a job's apple) is refused. Penalties (prisoner's dilemma, banker loss,
+  casino loss, divorce, pandemic) are always applied and stop at 0.
+- **Once only:** Teacher, Artist, gym membership. **Event-wide limits:** PhD 2
+  groups, Assassin 1, The Final Will 1. **Cooldown:** food delivery once per 20
+  minutes per group, losses included.
+- **Robbery** only for groups under $500. **Wedding:** both groups scan the same
+  QR; divorce frees both.
+- **Stations the rules document leaves blank** (Nurse, Surgeon, Lawyer,
+  Engineer, Drug, Food bank, Supermarket, Hospital, Bank, Wedding, Divorce):
+  the helper enters the amounts on the day; the degree requirement still applies.
+- **Awards:** the leaderboard ranks Monopoly (money), Joy Master (happiness)
+  and Wellness King/Queen (apples) separately. Raffle tickets are never shown
+  to other groups.
 
-## Learn More
+## How a scan stays correct when a whole group scans at once
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+Every scan is one Firestore transaction that reads the group, the QR's
+redemption record and any limit or marriage it touches, then decides and
+writes. Simultaneous scans are serialised by Firestore, so they cannot spend
+the same apple twice. The redemption record `redemptions/{qr}_{group}` makes
+each QR usable once per group. [`firestore.rules`](firestore.rules) refuses
+any negative stat, more than 8 apples or a degree above PhD, whatever a client
+sends.
 
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+The QR signing secret ships in the browser bundle, so a determined player
+could forge a code. The rules cap the damage; they cannot prevent it.

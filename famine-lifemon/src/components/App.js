@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 
 import '@fontsource/roboto/400.css';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
@@ -6,7 +6,7 @@ import { useAuthState } from 'react-firebase-hooks/auth';
 
 import { helperPath } from './secret/Secret';
 import { auth } from '../database/firebase';
-import { isValidGroup } from '../constants';
+import { isValidGroupId } from '../game/engine.js';
 import Passport from './Passport';
 import Layout from './Layout';
 import JoinGroup from './JoinGroup';
@@ -19,14 +19,14 @@ function useStoredGroup() {
   const [group, setGroupState] = useState(() => {
     try {
       const raw = window.localStorage.getItem('group');
-      return isValidGroup(raw) ? String(Number(raw)) : null;
+      return isValidGroupId(raw) ? raw : null;
     } catch (e) {
       return null;
     }
   });
 
-  const setGroup = (value) => {
-    const next = isValidGroup(value) ? String(Number(value)) : null;
+  const setGroup = useCallback((value) => {
+    const next = value != null && isValidGroupId(String(value)) ? String(value) : null;
     setGroupState(next);
     try {
       if (next) window.localStorage.setItem('group', next);
@@ -35,13 +35,14 @@ function useStoredGroup() {
       // A device that cannot persist still works for this session.
       console.warn('Could not save group to localStorage', e);
     }
-  };
+  }, []);
 
   return [group, setGroup];
 }
 
 export default function App() {
   const [group, setGroup] = useStoredGroup();
+  const leaveGroup = useCallback(() => setGroup(null), [setGroup]);
   // Firestore rules require request.auth, so nothing may run until the
   // anonymous sign-in started in database/firebase.js has resolved.
   const [user, authLoading, authError] = useAuthState(auth);
@@ -62,11 +63,11 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route path={helperPath} element={<Admin />} />
-          {/* Public scoreboard: works whether or not this device joined a group */}
+          {/* Public scoreboard, e.g. for a projector */}
           <Route path="result" element={<Result highlightGroup={group} />} />
           {group ? (
             <>
-              <Route index element={<Passport groupId={group} />} />
+              <Route index element={<Passport groupId={group} onGroupMissing={leaveGroup} />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </>
           ) : (
