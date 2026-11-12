@@ -1,42 +1,26 @@
 import { useState } from 'react';
 import Stack from '@mui/material/Stack';
 import Switch from '@mui/material/Switch';
+import { FormGroup, FormControlLabel, Typography } from '@mui/material';
+import { ThemeProvider, createTheme } from '@mui/material/styles';
 
 import Scanner from './Scanner';
-import { FormGroup, FormControlLabel, Typography } from '@mui/material';
-import { ThemeProvider,createTheme } from '@mui/material/styles';
 
-export default function QRBlock(props) {
+const theme = createTheme({ typography: { fontFamily: 'Ubuntu' } });
+
+export default function QRBlock({ groupId }) {
 	const [checked, setChecked] = useState(false);
-	let block;
-	function handleChange() {
-		setChecked(!checked);
-	}
-
-	if (checked) {
-		block = <Scanner setChecked={setChecked} snapshot={props.snapshot} id={props.id} />;
-	} else {
-		block = null;
-	}
-	const theme_3 = createTheme({
-		typography: {
-			fontFamily:'Ubuntu'
-		},
-		FormControlLabel: {
-			fontFamily: 'Ubuntu',
-			fontWeight: 'bold'
-		}
-	});
 	return (
-		<>
-		<ThemeProvider theme = {theme_3}>
+		<ThemeProvider theme={theme}>
 			<Stack spacing={2}>
 				<FormGroup>
-					<FormControlLabel control={<Switch checked={checked} onChange={handleChange}/>} label={<Typography fontWeight='bold'>TOGGLE SCANNER</Typography>} color="#111A2D"/>
+					<FormControlLabel
+						control={<Switch checked={checked} onChange={() => setChecked(!checked)} />}
+						label={<Typography fontWeight='bold'>TOGGLE SCANNER</Typography>}
+					/>
 				</FormGroup>
-				{block}
+				{checked && <Scanner setChecked={setChecked} groupId={groupId} />}
 			</Stack>
 		</ThemeProvider>
-		</>
 	);
 }

@@ -26,29 +26,42 @@ service cloud.firestore {
           && d.charityFood is number && d.charityFood <= 10000
           && d.happiness is number   && d.happiness <= 10000
           && d.charity is number     && d.charity <= 100000
-          && d.education is number   && d.education <= 10
-          && d.group is number       && d.group >= 1 && d.group <= 10;
+          && d.education is number   && d.education <= 10;
     }
 
-    match /users/{userId} {
-      // The Result page aggregates every user, so reads span the collection.
+    // One shared account per group; the document id IS the group number, so a
+    // group cannot end up with two accounts. There is no per-user ownership by
+    // design - everyone in the group writes to the same document.
+    function validGroupId(id) {
+      return id in ['1','2','3','4','5','6','7','8','9','10'];
+    }
+
+    // Groups start clean, so unlike the legacy users collection they can carry a
+    // hard floor of zero. This is the server-side backstop behind the
+    // transaction in Scanner.js: even a forged QR, a stale client or a bug
+    // cannot persist a negative stat, because Firestore refuses the write.
+    function nonNegative(d) {
+      return d.money >= 0
+          && d.food >= 0
+          && d.charityFood >= 0
+          && d.happiness >= 0
+          && d.charity >= 0
+          && d.education >= 0;
+    }
+
+    match /groups/{groupId} {
       allow read: if signedIn();
-
-      allow create: if signedIn()
-                    && request.resource.data.owner == request.auth.uid
-                    && sane(request.resource.data);
-
-      // Any signed-in client may update any user doc. This is deliberate: the
-      // owner check broke the recovery link, because restoring an account on a
-      // second device produces a different anonymous uid. The trade-off is that
-      // one participant can edit another's stats. Name, group and the stat
-      // bounds are still enforced.
-      allow update: if signedIn()
-                    && request.resource.data.name == resource.data.name
-                    && request.resource.data.group == resource.data.group
-                    && sane(request.resource.data);
-
+      allow create: if signedIn() && validGroupId(groupId)
+                    && sane(request.resource.data) && nonNegative(request.resource.data);
+      allow update: if signedIn() && validGroupId(groupId)
+                    && sane(request.resource.data) && nonNegative(request.resource.data);
       allow delete: if false;
+    }
+
+    // Retained read-only: the 2024 per-person records are history now.
+    match /users/{userId} {
+      allow read: if signedIn();
+      allow write: if false;
     }
 
     // stock/apple is seeded by hand in the console; the app only adjusts it.

@@ -1,111 +1,202 @@
-import React, { useEffect, useState } from 'react';
-import { Paper } from '@mui/material';
+import React from 'react';
+import { Box, Paper, Typography } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
-import { db } from '../database/firebase';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection } from 'firebase/firestore';
+import { useCollection } from 'react-firebase-hooks/firestore';
 
-import { repeatSymbol, perMember } from '../utils/display';
+import { db } from '../database/firebase';
+import { GROUPS, scoreOf } from '../constants';
 
 const charitySymbol = "\u{1F525}";
 const happySymbol = "\u{1F604}";
+const medals = { 1: "\u{1F947}", 2: "\u{1F948}", 3: "\u{1F949}" };
 
-const NUM_GROUPS = 10;
-const MARRIAGE_BONUS = 1000;
-
-// One read of the whole marriages collection, turned into
-// userId -> number of marriages that were never dissolved.
-// This used to be a per-user query inside the loop, which meant one round trip
-// per participant - over 200 of them, run serially.
-const buildMarriageCounts = async () => {
-  const counts = new Map();
-  try {
-    const snap = await getDocs(collection(db, 'marriages'));
-    for (const d of snap.docs) {
-      const m = d.data();
-      // marriages/counter is a bookkeeping doc with no participants
-      if (m.hasDivorced || !Array.isArray(m.participants)) continue;
-      for (const uid of m.participants) {
-        counts.set(uid, (counts.get(uid) || 0) + 1);
-      }
-    }
-  } catch (e) {
-    console.error('Could not read marriages; bonuses will be 0.', e);
-  }
-  return counts;
+// Counts run into the dozens by the end of an event, so one emoji followed by
+// a count stays readable where a repeated row of emoji does not.
+const countOf = (symbol, value) => {
+  const n = Number(value);
+  return `${symbol} × ${Number.isFinite(n) && n > 0 ? Math.floor(n) : 0}`;
 };
 
-const renderRows = (groups) => groups.map(g => ({
-  id: g.id,
-  happiness: repeatSymbol(happySymbol, perMember(g.happiness, g.numMembers)),
-  charity: repeatSymbol(charitySymbol, perMember(g.charity, g.numMembers)),
-  total: perMember(
-    g.charity * 30 + g.money * 20 + g.food * 20 + g.happiness * 30,
-    g.numMembers
-  ),
-}));
+export default function Result({ highlightGroup }) {
+  const [groupsSnap, groupsLoading, groupsError] = useCollection(collection(db, 'groups'));
+  const [marriagesSnap] = useCollection(collection(db, 'marriages'));
 
-const Result = () => {
-  const [rows, setRows] = useState([]);
-
-  useEffect(() => {
-    const calcGroupTotal = async () => {
-      const [usersSnapshot, marriageCounts] = await Promise.all([
-        getDocs(collection(db, 'users')),
-        buildMarriageCounts(),
-      ]);
-
-      const groups = Array.from({ length: NUM_GROUPS }, (_, i) => ({
-        id: i + 1,
-        numMembers: 0,
-        happiness: 0,
-        money: 0,
-        food: 0,
-        charity: 0,
-      }));
-
-      for (const docSnap of usersSnapshot.docs) {
-        const data = docSnap.data();
-        const index = Number(data.group) - 1;
-        // A document with a missing or out-of-range group used to index the
-        // array with undefined and crash the whole scoreboard.
-        if (!Number.isInteger(index) || index < 0 || index >= NUM_GROUPS) {
-          console.warn(`Skipping user ${docSnap.id}: bad group ${JSON.stringify(data.group)}`);
-          continue;
-        }
-        const g = groups[index];
-        g.numMembers += 1;
-        g.happiness += Number(data.happiness) || 0;
-        g.money += (Number(data.money) || 0)
-                 + (marriageCounts.get(docSnap.id) || 0) * MARRIAGE_BONUS;
-        g.food += (Number(data.food) || 0) + (Number(data.charityFood) || 0);
-        g.charity += Number(data.charity) || 0;
+  // groupNumber -> marriages never dissolved
+  const intact = new Map();
+  if (marriagesSnap) {
+    for (const d of marriagesSnap.docs) {
+      const m = d.data();
+      if (m.hasDivorced || !Array.isArray(m.participants)) continue; // skips marriages/counter
+      for (const p of m.participants) {
+        const n = Number(p);
+        if (Number.isInteger(n)) intact.set(n, (intact.get(n) || 0) + 1);
       }
+    }
+  }
 
-      setRows(renderRows(groups));
+  const byId = new Map();
+  if (groupsSnap) for (const d of groupsSnap.docs) byId.set(String(d.id), d.data());
+
+  const rows = GROUPS.map((n) => {
+    const g = byId.get(String(n)) || {};
+    return {
+      id: n,
+      charity: Math.max(Math.floor(Number(g.charity) || 0), 0),
+      happiness: Math.max(Math.floor(Number(g.happiness) || 0), 0),
+      total: scoreOf(g, intact.get(n) || 0),
     };
-    calcGroupTotal().catch(e => console.error('Scoreboard failed to load', e));
-  }, []);
+  });
+
+  rows.sort((a, b) => b.total - a.total || a.id - b.id);
+  let lastTotal = null;
+  let lastRank = 0;
+  rows.forEach((r, i) => {
+    if (r.total !== lastTotal) { lastRank = i + 1; lastTotal = r.total; }
+    r.rank = lastRank;
+  });
+
+  const mine = highlightGroup != null ? rows.find((r) => r.id === Number(highlightGroup)) : null;
+  const isMine = (id) => highlightGroup != null && Number(id) === Number(highlightGroup);
+
+  if (groupsError) {
+    return <Typography sx={{ textAlign: 'center', py: 2 }}>Could not load the leaderboard.</Typography>;
+  }
+
+  const columns = [
+    {
+      field: 'rank',
+      headerName: '#',
+      width: 58,
+      sortable: false,
+      align: 'center',
+      headerAlign: 'center',
+      renderCell: ({ value }) => (
+        <Typography component="span" fontWeight="bold" fontSize={15}>
+          {medals[value] || value}
+        </Typography>
+      ),
+    },
+    {
+      field: 'id',
+      headerName: 'Group',
+      flex: 1.1,
+      minWidth: 78,
+      sortable: false,
+      renderCell: ({ value }) => (
+        <Typography component="span" fontSize={14} fontWeight={isMine(value) ? 800 : 500}>
+          Group {value}{isMine(value) ? ' (you)' : ''}
+        </Typography>
+      ),
+    },
+    {
+      field: 'charity',
+      headerName: 'Charity',
+      flex: 1,
+      minWidth: 88,
+      sortable: false,
+      align: 'center',
+      headerAlign: 'center',
+      renderCell: ({ value }) => (
+        <Typography component="span" fontSize={14} sx={{ whiteSpace: 'nowrap' }}>
+          {countOf(charitySymbol, value)}
+        </Typography>
+      ),
+    },
+    {
+      field: 'happiness',
+      headerName: 'Happiness',
+      flex: 1,
+      minWidth: 100,
+      sortable: false,
+      align: 'center',
+      headerAlign: 'center',
+      renderCell: ({ value }) => (
+        <Typography component="span" fontSize={14} sx={{ whiteSpace: 'nowrap' }}>
+          {countOf(happySymbol, value)}
+        </Typography>
+      ),
+    },
+    {
+      field: 'total',
+      headerName: 'Score',
+      flex: 1,
+      minWidth: 84,
+      sortable: false,
+      align: 'right',
+      headerAlign: 'right',
+      renderCell: ({ value, row }) => (
+        <Typography component="span" fontSize={14} fontWeight={isMine(row.id) ? 800 : 600}>
+          {Number(value).toLocaleString()}
+        </Typography>
+      ),
+    },
+  ];
 
   return (
-    <Paper elevation={6} style={{ background: 'linear-gradient(45deg, #FFE078 10%, #FFC14F 100%)' }} >
-      <DataGrid
-        columns={[
-          { field: 'id', headerName: 'Group', flex: 2 },
-          { field: 'happiness', headerName: 'Happiness', flex: 3 },
-          { field: 'charity', headerName: 'Charity', flex: 3 },
-          { field: 'total', headerName: 'Total', flex: 2 },
-        ]}
-        rows={rows}
-        getRowHeight={() => 'auto'}
-        sx={{
-          '&.MuiDataGrid-root--densityStandard .MuiDataGrid-cell': {
-            py: '15px'
-          },
-        }}
-        hideFooter
-      />
-    </Paper>
-  )
-}
+    <Box>
+      {mine && (
+        <Paper
+          elevation={0}
+          sx={{
+            mb: 1.5, px: 2, py: 1.25, borderRadius: 2,
+            background: 'linear-gradient(135deg, #3F8F89 0%, #4FB2AA 100%)',
+            color: '#fff',
+            display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+          }}
+        >
+          <Box>
+            <Typography fontSize={12} sx={{ opacity: 0.85, letterSpacing: 0.6 }}>
+              YOUR GROUP
+            </Typography>
+            <Typography fontSize={19} fontWeight={800} lineHeight={1.15}>
+              {medals[mine.rank] ? `${medals[mine.rank]} ` : ''}Rank {mine.rank} of {rows.length}
+            </Typography>
+          </Box>
+          <Box sx={{ textAlign: 'right' }}>
+            <Typography fontSize={12} sx={{ opacity: 0.85 }}>SCORE</Typography>
+            <Typography fontSize={19} fontWeight={800} lineHeight={1.15}>
+              {mine.total.toLocaleString()}
+            </Typography>
+          </Box>
+        </Paper>
+      )}
 
-export default Result;
+      <Paper elevation={2} sx={{ borderRadius: 2, overflow: 'hidden' }}>
+        <DataGrid
+          rows={rows}
+          columns={columns}
+          loading={groupsLoading}
+          autoHeight
+          density="compact"
+          hideFooter
+          // Read-only board: no sorting, no filtering, no "Manage columns".
+          // The column menu stays so "Hide column" remains available.
+          disableColumnFilter
+          disableColumnSelector
+          disableRowSelectionOnClick
+          getRowClassName={({ id }) => (isMine(id) ? 'row-mine' : '')}
+          sx={{
+            border: 'none',
+            fontFamily: 'Karla, sans-serif',
+            '& .MuiDataGrid-columnHeaders': {
+              background: 'linear-gradient(45deg, #FFE078 10%, #FFC14F 100%)',
+              borderBottom: '2px solid rgba(0,0,0,0.12)',
+            },
+            '& .MuiDataGrid-columnHeaderTitle': {
+              fontWeight: 700, fontSize: 12, letterSpacing: 0.5, textTransform: 'uppercase',
+            },
+            '& .MuiDataGrid-columnSeparator': { display: 'none' },
+            '& .MuiDataGrid-cell': { borderBottom: '1px solid rgba(0,0,0,0.06)' },
+            '& .MuiDataGrid-cell:focus, & .MuiDataGrid-cell:focus-within': { outline: 'none' },
+            '& .MuiDataGrid-row:hover': { backgroundColor: 'rgba(79,178,170,0.08)' },
+            '& .row-mine': {
+              backgroundColor: 'rgba(79,178,170,0.20)',
+              '&:hover': { backgroundColor: 'rgba(79,178,170,0.28)' },
+            },
+          }}
+        />
+      </Paper>
+    </Box>
+  );
+}

@@ -7,7 +7,7 @@ import { ThemeProvider,createTheme } from '@mui/material/styles';
 
 import { repeatSymbol } from '../utils/display';
 
-export default function Stats({ snapshot, loading, showCharity }) {
+export default function Stats({ snapshot, loading, showCharity, groupId }) {
 	const theme_2 = createTheme({
 		typography: {
 			fontFamily:'Karla'
@@ -28,24 +28,12 @@ export default function Stats({ snapshot, loading, showCharity }) {
 						<Typography variant="body2" fontWeight='medium' color="#111A2D"
 							fontSize={13}
 							>
-							Name
-						</Typography>
-					</Grid>
-					<Grid item xs={8}>
-						<Typography variant="body2" fontWeight='bold' color="#111A2D" fontSize={14} style={{textTransform: 'uppercase'}} >
-							{loading ? "Loading..." : snapshot?.name}
-						</Typography>
-					</Grid>
-					<Grid item xs={3}>
-						<Typography variant="body2" fontWeight='medium' color="#111A2D"
-							fontSize={13}
-							>
 							Group
 						</Typography>
 					</Grid>
 					<Grid item xs={8}>
 						<Typography variant="body2" fontWeight='bold' color="#111A2D" fontSize={14} style={{textTransform: 'uppercase'}} >
-							{loading ? "Loading..." : "Group " + snapshot?.group}
+							{"Group " + (groupId ?? snapshot?.group ?? "?")}
 						</Typography>
 					</Grid>
 					<Grid item xs={3}>
