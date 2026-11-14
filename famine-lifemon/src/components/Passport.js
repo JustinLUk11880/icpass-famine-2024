@@ -2,9 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { Box, Collapse, Paper, Stack, Typography } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { doc } from 'firebase/firestore';
-import { useDocument } from 'react-firebase-hooks/firestore';
+import { useDocument, useDocumentData } from 'react-firebase-hooks/firestore';
 
 import Announcement from './Announcement';
+import FinalWillVote from './FinalWillVote';
 import Stats from './Stats';
 import QRBlock from './QRBlock';
 import Result from './Result';
@@ -19,6 +20,8 @@ export default function Passport({ groupId, onGroupMissing }) {
 	// report a cached miss, and must not be bounced out of its group for it.
 	const confirmedMissing = !!docSnap && !docSnap.exists() && !docSnap.metadata.fromCache;
 	const [showBoard, setShowBoard] = useState(false);
+	const marriageId = snapshot?.married && snapshot?.marriageId ? String(snapshot.marriageId) : null;
+	const [marriage] = useDocumentData(marriageId ? doc(db, 'marriages', marriageId) : null);
 
 	if (error) console.error('Passport read failed', error);
 
@@ -33,7 +36,8 @@ export default function Passport({ groupId, onGroupMissing }) {
 	return (
 		<Stack spacing={2}>
 			<Announcement />
-			<Stats snapshot={snapshot} loading={loading} groupId={groupId} />
+			<FinalWillVote groupId={groupId} />
+			<Stats snapshot={snapshot} loading={loading} groupId={groupId} marriage={marriage} />
 			<QRBlock groupId={groupId} />
 
 			<Paper elevation={3}>

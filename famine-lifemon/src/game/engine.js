@@ -6,7 +6,7 @@
 // to write - it never talks to the network itself.
 
 import {
-  APPLE_MAX, EDU, EDUCATION_LABELS, LIMITS, MAX_GROUPS, MINUTE, getStation,
+  APPLE_MAX, EDU, EDUCATION_LABELS, LIMITS, MAX_GROUPS, MINUTE, cooldownLabel, getStation,
 } from './catalog.js';
 
 export const QR_HEADER = 'lifemon-v2';
@@ -91,6 +91,8 @@ export function effectOf(station, inputs) {
     raffle: Math.max(0, Math.trunc(num(e.raffle))),
     setFlag: e.setFlag || null,
     marriage: e.marriage || null,
+    deposit: Math.max(0, Math.trunc(num(e.deposit))),
+    pool: e.pool && e.pool.key ? { key: String(e.pool.key), delta: Math.trunc(num(e.pool.delta)) } : null,
   };
 }
 
@@ -127,11 +129,13 @@ export function planReads(station, payload, group) {
   const e = effectOf(station, inputs);
   const plan = {};
   if (e.limit) plan.limitKey = e.limit.key;
+  if (e.pool) plan.poolKey = e.pool.key;
+  if (e.checks.some((c) => c.type === 'voteWinner')) plan.votingId = 'finalWill';
   if (e.marriage === 'wedding' && typeof payload?.q === 'string') plan.marriageId = marriageIdFor(payload.q);
-  if (e.marriage === 'divorce' && group?.marriageId) {
+  if ((e.marriage === 'deposit' || e.marriage === 'divorce') && group?.marriageId) {
     plan.marriageId = String(group.marriageId);
-    plan.readPartners = true;
   }
+  if (e.marriage === 'divorce' && group?.marriageId) plan.readPartners = true;
   return plan;
 }
 
@@ -155,8 +159,11 @@ function applyStat(cur, delta, penalty, cap) {
   return { value: v, capped };
 }
 
+const marriageParts = (m) => (Array.isArray(m?.participants) ? m.participants.map(String) : []);
+export const potOf = (m) => Math.max(0, Math.trunc(num(m?.pot)));
+
 export function resolveScan({
-  station, payload, group, groupId, limit = null, marriage = null, partners = {},
+  station, payload, group, groupId, limit = null, marriage = null, partners = {}, pool = null, voting = null,
 }) {
   if (!station) return fail('unknown_station');
   if (!group) return fail('missing_group');
@@ -177,6 +184,47 @@ export function resolveScan({
     if (c.type === 'notFlag' && group[c.flag]) return fail(`already_${c.flag}`);
     if (c.type === 'notMarried' && group.married) return fail('already_married');
     if (c.type === 'married' && !(group.married && group.marriageId)) return fail('not_married');
+    // Only enforced once the in-app vote has announced a winner, so the QR
+    // still works if the vote is run on paper instead.
+    if (c.type === 'voteWinner' && voting?.winner != null && String(voting.winner) !== gid) {
+      return fail('not_vote_winner', { winner: voting.winner });
+    }
+    if (c.type === 'appleRoom') {
+      const room = APPLE_MAX - Math.max(0, Math.trunc(num(group.food)));
+      if (room < c.count) return fail('apples_full', { room: Math.max(0, room) });
+    }
+  }
+
+  // Marriage bank: a deposit needs a complete, still-running marriage.
+  if (e.marriage === 'deposit') {
+    const parts = marriageParts(marriage);
+    if (!marriage || marriage.hasDivorced || marriage.paidOut || !parts.includes(gid)) return fail('marriage_over');
+    if (parts.length < 2) return fail('marriage_not_ready');
+  }
+
+  // Divorce: the group that asks gets the pot x 1.5 but loses 3 happiness and
+  // 10 apples; the other group gets +3 happiness and +10 apples. A wedding
+  // the partner never scanned is simply cancelled.
+  let divorcePot = 0;
+  let divorceComplete = false;
+  if (e.marriage === 'divorce') {
+    const parts = marriageParts(marriage);
+    divorceComplete = !!marriage && !marriage.hasDivorced && parts.length === 2 && parts.includes(gid);
+    if (divorceComplete) {
+      divorcePot = potOf(marriage);
+      e.money += Math.round(divorcePot * 1.5);
+      e.happiness -= 3;
+      e.food -= 10;
+      e.penalty = true;
+    }
+  }
+
+  // Shared donation box (supermarket).
+  let poolUpdate = null;
+  if (e.pool) {
+    const have = Math.max(0, Math.trunc(num(pool?.count)));
+    if (e.pool.delta < 0 && have < -e.pool.delta) return fail('pool_empty', { count: have });
+    poolUpdate = { count: have + e.pool.delta };
   }
 
   const once = { ...(group.once || {}) };
@@ -190,7 +238,10 @@ export function resolveScan({
     const last = num(cooldowns[e.cooldown.key]);
     const elapsed = t - last;
     if (last && elapsed < e.cooldown.ms) {
-      return fail('cooldown', { minutes: Math.max(1, Math.ceil((e.cooldown.ms - elapsed) / MINUTE)) });
+      return fail('cooldown', {
+        minutes: Math.max(1, Math.ceil((e.cooldown.ms - elapsed) / MINUTE)),
+        label: cooldownLabel(e.cooldown.key),
+      });
     }
     cooldowns[e.cooldown.key] = t;
   }
@@ -229,31 +280,46 @@ export function resolveScan({
   const partnerUpdates = {};
   if (e.marriage === 'wedding') {
     marriageId = marriageIdFor(payload.q);
-    const parts = Array.isArray(marriage?.participants) ? marriage.participants.map(String) : [];
-    if (marriage?.hasDivorced) return fail('marriage_over');
+    const parts = marriageParts(marriage);
+    if (marriage?.hasDivorced || marriage?.paidOut) return fail('marriage_over');
     if (!parts.includes(gid) && parts.length >= 2) return fail('marriage_full');
     marriageWrite = {
       participants: parts.includes(gid) ? parts : [...parts, gid],
       hasDivorced: false,
       createdAt: marriage?.createdAt ?? t,
+      pot: potOf(marriage),
+      deposits: { ...(marriage?.deposits || {}) },
     };
     groupUpdate.married = true;
     groupUpdate.marriageId = marriageId;
+  } else if (e.marriage === 'deposit') {
+    marriageId = String(group.marriageId);
+    const deposits = { ...(marriage.deposits || {}) };
+    deposits[gid] = Math.trunc(num(deposits[gid])) + e.deposit;
+    marriageWrite = { ...marriage, pot: potOf(marriage) + e.deposit, deposits };
   } else if (e.marriage === 'divorce') {
     marriageId = String(group.marriageId);
-    const parts = Array.isArray(marriage?.participants) ? marriage.participants.map(String) : [gid];
+    const parts = marriageParts(marriage);
     marriageWrite = {
-      participants: parts,
+      ...(marriage || {}),
+      participants: parts.length ? parts : [gid],
       hasDivorced: true,
       createdAt: marriage?.createdAt ?? t,
       dissolvedBy: gid,
       dissolvedAt: t,
+      potAtDivorce: divorcePot,
+      pot: 0,
     };
     // The marriage ends for both groups, so the partner is not left showing
     // MARRIED to a marriage that no longer exists.
     for (const p of parts) {
       if (p !== gid && partners[p] && String(partners[p].marriageId) === marriageId) {
+        const pg = partners[p];
         partnerUpdates[p] = { married: false, marriageId: null };
+        if (divorceComplete) {
+          partnerUpdates[p].happiness = applyStat(num(pg.happiness), 3, true).value;
+          partnerUpdates[p].food = applyStat(num(pg.food), 10, true, APPLE_MAX).value;
+        }
       }
     }
     groupUpdate.married = false;
@@ -276,6 +342,8 @@ export function resolveScan({
     marriageId,
     marriageWrite,
     partnerUpdates,
+    poolKey: e.pool ? e.pool.key : null,
+    poolUpdate,
     summary: {
       money: next.money - cur.money,
       food: next.food - cur.food,
@@ -284,8 +352,58 @@ export function resolveScan({
       capped,
       raffle: e.raffle,
       marriage: e.marriage,
+      deposit: e.deposit || 0,
       gymMember: e.setFlag === 'gymMember',
     },
+  };
+}
+
+// -------------------------------------------------------- final will vote ---
+
+// Each group casts one vote (changeable while voting is open) for another
+// group. Returns every voted-for group with its count, most votes first,
+// and the leaders - more than one leader means a tie for the helper to break.
+export function tallyVotes(votes = []) {
+  const counts = new Map();
+  for (const v of votes) {
+    if (!v || !isValidGroupId(v.voter) || !isValidGroupId(String(v.for))) continue;
+    if (String(v.voter) === String(v.for)) continue;
+    const k = Number(v.for);
+    counts.set(k, (counts.get(k) || 0) + 1);
+  }
+  const rows = [...counts.entries()].map(([group, count]) => ({ group, count }))
+    .sort((a, b) => b.count - a.count || a.group - b.group);
+  const top = rows.length ? rows[0].count : 0;
+  return { rows, leaders: rows.filter((r) => r.count === top && top > 0).map((r) => r.group), total: votes.length };
+}
+
+// ------------------------------------------------------ marriage payout ---
+
+// "At the end both parti can both get the amount in pot * 2 plus 10 apples."
+// Each group of a complete, undivorced, unpaid marriage receives pot x 2 and
+// +10 apples (capped at 8). `groups` maps group id -> group document.
+export function resolveMarriagePayout(marriage, groups = {}) {
+  const parts = marriageParts(marriage);
+  if (!marriage || marriage.hasDivorced || marriage.paidOut) return fail('marriage_over');
+  if (parts.length !== 2) return fail('marriage_not_ready');
+  const pot = potOf(marriage);
+  const updates = {};
+  const summaries = {};
+  for (const p of parts) {
+    const g = groups[p];
+    if (!g) return fail('missing_group', { gid: p });
+    const cur = { money: num(g.money), food: num(g.food) };
+    const money = cur.money + pot * 2;
+    const food = applyStat(cur.food, 10, true, APPLE_MAX).value;
+    updates[p] = { money, food };
+    summaries[p] = { money: money - cur.money, food: food - cur.food, happiness: 0 };
+  }
+  return {
+    ok: true,
+    pot,
+    updates,
+    summaries,
+    marriageWrite: { ...marriage, paidOut: true, potAtPayout: pot, pot: 0 },
   };
 }
 
@@ -341,7 +459,9 @@ export function resolveGlobalEvent(eventId, group) {
 
 // Helper-side correction. Deltas stop at 0 and apples stay within the cap;
 // an education value, when given, is set outright.
-export function resolveAdjustment(group, { money = 0, food = 0, happiness = 0, education = null } = {}) {
+export function resolveAdjustment(group, {
+  money = 0, food = 0, happiness = 0, education = null, clearCooldowns = false,
+} = {}) {
   if (!group) return fail('missing_group');
   const cur = { money: num(group.money), food: num(group.food), happiness: num(group.happiness) };
   const d = { money: Math.trunc(num(money)), food: Math.trunc(num(food)), happiness: Math.trunc(num(happiness)) };
@@ -355,6 +475,7 @@ export function resolveAdjustment(group, { money = 0, food = 0, happiness = 0, e
   if (education !== null && education !== '' && Number.isInteger(edu) && edu >= EDU.NONE && edu <= EDU.PHD) {
     groupUpdate.education = edu;
   }
+  if (clearCooldowns) groupUpdate.cooldowns = {};
   return {
     ok: true,
     groupUpdate,
@@ -363,6 +484,7 @@ export function resolveAdjustment(group, { money = 0, food = 0, happiness = 0, e
       food: next.food - cur.food,
       happiness: next.happiness - cur.happiness,
       educationTo: groupUpdate.education ?? null,
+      clearedCooldowns: !!clearCooldowns,
     },
   };
 }
@@ -409,7 +531,9 @@ export function summaryText(s) {
   if (s.raffle) parts.push(`🎟 +${s.raffle}`);
   if (s.gymMember) parts.push('🏋️ Gym member');
   if (s.marriage === 'wedding') parts.push('💍 Married');
+  if (s.marriage === 'deposit') parts.push(`🏦 $${Number(s.deposit || 0).toLocaleString('en-US')} into the marriage pot`);
   if (s.marriage === 'divorce') parts.push('💔 Divorced');
+  if (s.clearedCooldowns) parts.push('⏱ Cooldowns cleared');
   if (s.capped) parts.push(`(apples capped at ${APPLE_MAX})`);
   return parts.length ? parts.join('  ·  ') : 'Recorded';
 }
@@ -433,8 +557,17 @@ export function reasonMessage(reason, detail = {}) {
     case 'not_married': return 'Your group is not married.';
     case 'marriage_full': return 'This wedding already has two groups.';
     case 'marriage_over': return 'This marriage has already ended.';
+    case 'missing_partner': return 'The partner group account was not found.';
     case 'already_done': return 'Your group has already done this - it can only be done once.';
-    case 'cooldown': return `Too soon - your group can try again in ${detail.minutes} min.`;
+    case 'cooldown': return `Too soon - your group can play ${detail.label || 'this'} again in ${detail.minutes} min.`;
+    case 'apples_full': return detail.room
+      ? `Your group only has room for ${detail.room} more apple${detail.room === 1 ? '' : 's'} (max ${APPLE_MAX}).`
+      : `Your group already has ${APPLE_MAX} apples - the maximum.`;
+    case 'pool_empty': return detail.count
+      ? `Only ${detail.count} donated apple${detail.count === 1 ? ' is' : 's are'} left in the box.`
+      : 'The donation box is empty.';
+    case 'not_vote_winner': return `The Final Will went to Group ${detail.winner} - only they can scan this.`;
+    case 'marriage_not_ready': return 'Your partner group has not scanned the wedding QR yet.';
     case 'limit_reached': return LIMIT_REACHED[detail.key] || 'No places left for this.';
     case 'hungry': return 'Your group does not have enough apples.';
     case 'sad': return 'Your group is too unhappy to do this.';
@@ -463,10 +596,13 @@ export function describeStation(station, inputs) {
     if (c.type === 'notFlag' && c.flag === 'gymMember') req.push('Not for existing members');
     if (c.type === 'notMarried') req.push('Not for married groups');
     if (c.type === 'married') req.push('Married groups only');
+    if (c.type === 'voteWinner') req.push('Only the group that won the vote');
+    if (c.type === 'appleRoom') req.push(`Needs room for ${c.count} apple${c.count === 1 ? '' : 's'} (max ${APPLE_MAX})`);
   }
+  if (e.pool && e.pool.delta < 0) req.push('Donation box must have enough apples');
   if (e.once) req.push('Once per group');
   if (e.limit) req.push(`Max ${e.limit.max} ${e.limit.max === 1 ? 'team' : 'teams'} for the whole event`);
-  if (e.cooldown) req.push(`One try every ${Math.round(e.cooldown.ms / MINUTE)} mins`);
+  if (e.cooldown) req.push(`${Math.round(e.cooldown.ms / MINUTE)}-min cooldown per group (losses count)`);
   const delta = formatDelta(e);
   if (delta) fx.push(delta);
   if (e.educationTo !== null) fx.push(`Graduates to ${EDUCATION_LABELS[e.educationTo]}`);
@@ -474,7 +610,13 @@ export function describeStation(station, inputs) {
   if (e.setFlag === 'gymMember') fx.push('Becomes a gym member');
   if (e.penalty) fx.push('Penalty: applies even if they cannot afford it (stops at 0)');
   if (e.marriage === 'wedding') fx.push('Both groups scan this same QR');
-  if (e.marriage === 'divorce') fx.push('Ends the marriage for both groups');
+  if (e.marriage === 'deposit') fx.push(`$${e.deposit} goes into the marriage pot`);
+  if (e.marriage === 'divorce') {
+    fx.push('Divorcing group: + pot x 1.5, −3 😄, −10 🍎');
+    fx.push('Other group: +3 😄, +10 🍎');
+  }
+  if (e.pool && e.pool.delta > 0) fx.push(`+${e.pool.delta} 🍎 into the donation box`);
+  if (e.pool && e.pool.delta < 0) fx.push(`${e.pool.delta} 🍎 from the donation box`);
   if (!fx.length) fx.push('Records the try only - no stat change');
   return { complete: true, req, fx };
 }

@@ -6,13 +6,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  APPLE_MAX, EDU, LIMITS, MAX_GROUPS, MINUTE, STAGES, STATIONS, getStation,
+  APPLE_MAX, DEFAULT_GROUP_COUNT, EDU, GAME_COOLDOWN_MS, LIMITS, MAX_GROUPS, MINUTE, STAGES, STATIONS,
+  cooldownKeyFor, cooldownLabel, cooldownMsFor, getStation,
 } from '../src/game/catalog.js';
 import {
   QR_HEADER, QR_LIFETIME_MS, buildPayload, describeStation, effectOf, formatDelta,
   isComplete, isValidGroupId, missingFields, newQrId, planReads, randomProfile,
-  reasonMessage, resolveAdjustment, resolveGlobalEvent, resolveScan, sanitizeInputs,
-  summaryText, validatePayload,
+  reasonMessage, resolveAdjustment, resolveGlobalEvent, resolveMarriagePayout, resolveScan,
+  sanitizeInputs, summaryText, tallyVotes, validatePayload,
 } from '../src/game/engine.js';
 
 // ---------------------------------------------------------------- helpers ---
@@ -36,6 +37,9 @@ function inputsFor(station, over = {}) {
   return { ...i, ...over };
 }
 
+// A full marriage of groups 1 and 2, the default for deposit scans.
+const MARRIAGE_1_2 = { participants: ['1', '2'], hasDivorced: false, createdAt: T0, pot: 0, deposits: {} };
+
 function scan(stationId, inputs, group, extra = {}) {
   const station = getStation(stationId);
   assert.ok(station, `unknown station ${stationId}`);
@@ -45,8 +49,10 @@ function scan(stationId, inputs, group, extra = {}) {
     group,
     groupId: extra.groupId || '1',
     limit: extra.limit ?? null,
-    marriage: extra.marriage ?? null,
+    marriage: extra.marriage !== undefined ? extra.marriage : (stationId === 'wed.deposit' ? MARRIAGE_1_2 : null),
     partners: extra.partners ?? {},
+    pool: extra.pool !== undefined ? extra.pool : (station.poolKey ? { count: 20 } : null),
+    voting: extra.voting ?? null,
   });
 }
 
@@ -58,7 +64,7 @@ function eligibleGroup(station) {
   const g = baseGroup({ education: station.minEducation, money: 3000, food: 4, happiness: 20 });
   if (station.id === 'secret.robbery') g.money = 100;
   if (station.id === 'com.gymMembership') g.gymMember = false;
-  if (station.id === 'wed.divorce') Object.assign(g, { married: true, marriageId: 'm_x' });
+  if (station.id === 'wed.divorce' || station.id === 'wed.deposit') Object.assign(g, { married: true, marriageId: 'm_x' });
   return g;
 }
 
@@ -99,13 +105,14 @@ test('catalog: every station from the rules document is present', () => {
   const expected = [
     'college.primary', 'college.secondary', 'college.ug', 'college.phd',
     'jobs.foodDelivery', 'jobs.warehouse',
-    'jobs.police', 'jobs.nurse', 'jobs.teacher', 'jobs.artist',
+    'jobs.police', 'jobs.policeRobbery', 'jobs.nurse', 'jobs.teacher', 'jobs.artist',
     'jobs.surgeon', 'jobs.banker', 'jobs.lawyer', 'jobs.engineer',
     'illegal.drug', 'illegal.assassin', 'illegal.prisoner',
     'secret.finalWill', 'secret.robbery',
     'ent.casino', 'ent.raffle', 'ent.sauna',
-    'com.gymMembership', 'com.gymChallenge', 'com.foodBank', 'com.supermarket', 'com.hospital', 'com.bank',
-    'wed.wedding', 'wed.divorce',
+    'shop.buyApples', 'shop.donate', 'shop.receive',
+    'com.gymMembership', 'com.gymChallenge', 'com.foodWaste', 'com.bowling', 'com.hospital',
+    'wed.wedding', 'wed.deposit', 'wed.divorce',
   ];
   for (const id of expected) assert.ok(getStation(id), `missing station ${id}`);
   assert.equal(STATIONS.length, expected.length, 'unexpected extra station');
@@ -143,14 +150,23 @@ const RULES = [
   ['jobs.foodDelivery', { result: 'lose' }, { money: 0, food: 0, happiness: 0 }],
   ['jobs.warehouse', { time: 'under90' }, { money: 50, food: -1, happiness: 0 }],
   ['jobs.warehouse', { time: 'under60' }, { money: 75, food: -1, happiness: 0 }],
-  ['jobs.police', { smugglers: 0, robbery: false }, { money: 150, food: -1, happiness: -1 }],
-  ['jobs.police', { smugglers: 3, robbery: false }, { money: 450, food: -1, happiness: -1 }],
-  ['jobs.police', { smugglers: 2, robbery: true }, { money: 850, food: -1, happiness: -1 }],
+  ['jobs.warehouse', { time: 'over90' }, { money: 0, food: 0, happiness: 0 }],
+  ['jobs.police', { smugglers: 0 }, { money: 150, food: -1, happiness: -1 }],
+  ['jobs.police', { smugglers: 3 }, { money: 450, food: -1, happiness: -1 }],
+  ['jobs.policeRobbery', {}, { money: 500, food: 0, happiness: 0 }],
+  ['jobs.nurse', {}, { money: 200, food: -1, happiness: 0 }],
   ['jobs.teacher', {}, { money: 300, food: -1, happiness: -1 }],
   ['jobs.artist', { watchers: 0 }, { money: 200, food: -2, happiness: 0 }],
   ['jobs.artist', { watchers: 4 }, { money: 1000, food: -2, happiness: 0 }],
-  ['jobs.banker', { result: 'win' }, { money: 500, food: 0, happiness: 0 }],
-  ['jobs.banker', { result: 'lose' }, { money: -50, food: 0, happiness: 0 }],
+  ['jobs.surgeon', { result: 'win' }, { money: 350, food: -1, happiness: 0 }],
+  ['jobs.surgeon', { result: 'lose' }, { money: -50, food: -1, happiness: 0 }],
+  ['jobs.banker', { result: 'win' }, { money: 350, food: -1, happiness: 0 }],
+  ['jobs.banker', { result: 'lose' }, { money: -50, food: -1, happiness: 0 }],
+  ['jobs.lawyer', { result: 'win' }, { money: 350, food: -1, happiness: 0 }],
+  ['jobs.lawyer', { result: 'lose' }, { money: -50, food: -1, happiness: 0 }],
+  ['jobs.engineer', { result: 'win' }, { money: 500, food: -1, happiness: 0 }],
+  ['jobs.engineer', { result: 'lose' }, { money: 0, food: -1, happiness: 0 }],
+  ['illegal.drug', {}, { money: 500, food: -1, happiness: 0 }],
   ['illegal.assassin', {}, { money: 750, food: -1, happiness: 0 }],
   ['illegal.prisoner', { outcome: 'bothSilent' }, { money: -50, food: 0, happiness: -2 }],
   ['illegal.prisoner', { outcome: 'silentBetrayed' }, { money: -150, food: 0, happiness: -2 }],
@@ -167,8 +183,14 @@ const RULES = [
   ['com.gymMembership', {}, { money: -350, food: 0, happiness: 0 }],
   ['com.gymChallenge', { sets: 1 }, { money: 0, food: 1, happiness: 0 }],
   ['com.gymChallenge', { sets: 3 }, { money: 0, food: 3, happiness: 0 }],
-  ['wed.wedding', {}, { money: -500, food: -2, happiness: 2 }],
-  ['wed.divorce', {}, { money: 0, food: 0, happiness: -2 }],
+  ['shop.buyApples', { price: 120, apples: 2 }, { money: -240, food: 2, happiness: 0 }],
+  ['shop.buyApples', { price: 50, apples: 1 }, { money: -50, food: 1, happiness: 0 }],
+  ['shop.donate', { apples: 3 }, { money: 0, food: -3, happiness: 0 }],
+  ['shop.receive', { apples: 2 }, { money: 0, food: 2, happiness: 0 }],
+  ['com.foodWaste', { boxes: 1 }, { money: 10, food: 0, happiness: 0 }],
+  ['com.foodWaste', { boxes: 3 }, { money: 30, food: 0, happiness: 0 }],
+  ['wed.wedding', {}, { money: 0, food: 0, happiness: 0 }],
+  ['wed.deposit', { amount: 300 }, { money: -300, food: 0, happiness: 0 }],
 ];
 
 for (const [id, inputs, expected, eduAfter] of RULES) {
@@ -277,9 +299,10 @@ test('penalties: always applied, never below zero', () => {
   assert.equal(b.groupUpdate.money, 0);
   const c = scan('ent.casino', { amount: -5000 }, baseGroup({ money: 120 }));
   assert.equal(c.groupUpdate.money, 0);
-  const d = scan('wed.divorce', {}, baseGroup({ married: true, marriageId: 'm_x', happiness: 1 }));
-  assert.equal(d.ok, true, 'a sad group can still divorce');
+  const d = scan('wed.divorce', {}, baseGroup({ married: true, marriageId: 'm_x', happiness: 1, food: 2 }), { marriage: MARRIAGE_1_2 });
+  assert.equal(d.ok, true, 'a sad, hungry group can still divorce');
   assert.equal(d.groupUpdate.happiness, 0);
+  assert.equal(d.groupUpdate.food, 0);
 });
 
 test('apples: capped at 8 and never reduced by a gain', () => {
@@ -291,7 +314,7 @@ test('apples: capped at 8 and never reduced by a gain', () => {
   assert.equal(full.groupUpdate.food, 8);
   const legacy = scan('com.gymChallenge', { sets: 1 }, baseGroup({ food: 11 }));
   assert.equal(legacy.groupUpdate.food, 11, 'must not cut an existing over-cap value');
-  const custom = scan('com.supermarket', { food: 8 }, baseGroup({ food: 3 }));
+  const custom = scan('com.hospital', { food: 8 }, baseGroup({ food: 3 }));
   assert.equal(custom.groupUpdate.food, 8);
 });
 
@@ -316,11 +339,149 @@ test('cooldown: food delivery is one try per 20 minutes, losses included', () =>
   assert.equal(early.ok, false);
   assert.equal(early.reason, 'cooldown');
   assert.equal(early.detail.minutes, 1);
+  assert.equal(early.detail.label, 'Food delivery');
   const onTime = scan('jobs.foodDelivery', { result: 'win' }, g, { t: T0 + 20 * MINUTE });
   assert.equal(onTime.ok, true);
   assert.equal(onTime.summary.money, 70);
   // the cooldown belongs to the group, not the station: another group is free
   assert.equal(scan('jobs.foodDelivery', { result: 'win' }, baseGroup(), { t: T0 + MINUTE }).ok, true);
+});
+
+test('cooldown: 15 minutes per game per group; entertainment, shop, penalties and bank exempt', () => {
+  const games = ['college.primary', 'college.phd', 'jobs.warehouse', 'jobs.police', 'jobs.nurse', 'jobs.surgeon',
+    'jobs.banker', 'jobs.lawyer', 'jobs.engineer', 'illegal.drug', 'com.gymChallenge'];
+  for (const id of games) {
+    const st = getStation(id);
+    const g0 = eligibleGroup(st);
+    const first = scan(id, {}, g0, { t: T0 });
+    assert.equal(first.ok, true, `${id}: ${first.reason}`);
+    assert.equal(first.groupUpdate.cooldowns[cooldownKeyFor(id)], T0, id);
+    const g = { ...g0, cooldowns: first.groupUpdate.cooldowns };
+    const early = scan(id, {}, g, { t: T0 + 14 * MINUTE });
+    assert.equal(early.reason, 'cooldown', id);
+    assert.equal(early.detail.label, st.label);
+    assert.ok(!reasonMessage('cooldown', early.detail).includes('undefined'));
+    assert.equal(scan(id, {}, g, { t: T0 + GAME_COOLDOWN_MS }).ok, true, `${id} after 15 min`);
+    assert.equal(cooldownMsFor(cooldownKeyFor(id)), GAME_COOLDOWN_MS);
+    assert.equal(cooldownLabel(cooldownKeyFor(id)), st.label);
+  }
+  // a loss starts the cooldown too
+  const lost = scan('jobs.banker', { result: 'lose' }, baseGroup(), { t: T0 });
+  assert.equal(scan('jobs.banker', { result: 'win' }, baseGroup({ cooldowns: lost.groupUpdate.cooldowns }), { t: T0 + MINUTE }).reason, 'cooldown');
+  // cooldowns are per station: banker does not block police
+  assert.equal(scan('jobs.police', {}, baseGroup({ cooldowns: lost.groupUpdate.cooldowns }), { t: T0 + MINUTE }).ok, true);
+  const exempt = ['ent.casino', 'ent.raffle', 'ent.sauna', 'illegal.prisoner', 'jobs.policeRobbery', 'secret.robbery',
+    'shop.buyApples', 'shop.donate', 'shop.receive', 'com.foodWaste', 'com.gymMembership', 'wed.wedding', 'wed.divorce'];
+  for (const id of exempt) {
+    const e = effectOf(getStation(id), inputsFor(getStation(id)));
+    assert.equal(e.cooldown, null, `${id} must have no cooldown`);
+  }
+  // the bank: one deposit per 30 minutes
+  const dep = getStation('wed.deposit');
+  assert.equal(effectOf(dep, inputsFor(dep)).cooldown.ms, 30 * MINUTE);
+});
+
+test('supermarket: buying needs room for the apples; donation box in and out', () => {
+  assert.equal(scan('shop.buyApples', { price: 100, apples: 3 }, baseGroup({ food: 6 })).reason, 'apples_full');
+  assert.equal(scan('shop.buyApples', { price: 100, apples: 2 }, baseGroup({ food: 6 })).ok, true);
+  assert.equal(scan('shop.buyApples', { price: 200, apples: 2 }, baseGroup({ money: 399 })).reason, 'poor');
+  const buy = getStation('shop.buyApples');
+  assert.deepEqual(missingFields(buy, sanitizeInputs(buy, { apples: 1 })), ['price'], 'price must be entered');
+  assert.equal(sanitizeInputs(buy, { price: 20, apples: 1 }).price, 50, 'price clamped to $50-$200');
+  const d = scan('shop.donate', { apples: 2 }, baseGroup({ food: 3 }), { pool: { count: 1 } });
+  assert.deepEqual(d.poolUpdate, { count: 3 });
+  assert.equal(d.groupUpdate.food, 1);
+  assert.equal(scan('shop.donate', { apples: 4 }, baseGroup({ food: 3 }), { pool: null }).reason, 'hungry');
+  const rcv = scan('shop.receive', { apples: 2 }, baseGroup({ food: 1 }), { pool: { count: 2 } });
+  assert.deepEqual(rcv.poolUpdate, { count: 0 });
+  assert.equal(rcv.groupUpdate.food, 3);
+  assert.equal(scan('shop.receive', { apples: 3 }, baseGroup({ food: 1 }), { pool: { count: 2 } }).reason, 'pool_empty');
+  assert.equal(scan('shop.receive', { apples: 1 }, baseGroup({ food: 1 }), { pool: null }).reason, 'pool_empty');
+  assert.equal(scan('shop.receive', { apples: 2 }, baseGroup({ food: 7 }), { pool: { count: 5 } }).reason, 'apples_full');
+});
+
+test('marriage bank: deposits need a complete marriage and add to the pot', () => {
+  const married = baseGroup({ married: true, marriageId: 'm_x' });
+  const d1 = scan('wed.deposit', { amount: 200 }, married, { groupId: '1' });
+  assert.equal(d1.ok, true);
+  assert.equal(d1.marriageWrite.pot, 200);
+  assert.deepEqual(d1.marriageWrite.deposits, { 1: 200 });
+  const d2 = scan('wed.deposit', { amount: 500 }, married, { groupId: '2', marriage: d1.marriageWrite });
+  assert.equal(d2.marriageWrite.pot, 700);
+  assert.deepEqual(d2.marriageWrite.deposits, { 1: 200, 2: 500 });
+  // 30 minutes between deposits
+  const again = scan('wed.deposit', { amount: 100 }, { ...married, cooldowns: d1.groupUpdate.cooldowns },
+    { groupId: '1', marriage: d2.marriageWrite, t: T0 + 29 * MINUTE });
+  assert.equal(again.reason, 'cooldown');
+  assert.equal(scan('wed.deposit', { amount: 100 }, { ...married, cooldowns: d1.groupUpdate.cooldowns },
+    { groupId: '1', marriage: d2.marriageWrite, t: T0 + 30 * MINUTE }).marriageWrite.pot, 800);
+  // refusals
+  assert.equal(scan('wed.deposit', { amount: 100 }, baseGroup()).reason, 'not_married');
+  assert.equal(scan('wed.deposit', { amount: 100 }, married, { marriage: { participants: ['1'] } }).reason, 'marriage_not_ready');
+  assert.equal(scan('wed.deposit', { amount: 100 }, married, { marriage: { ...MARRIAGE_1_2, hasDivorced: true } }).reason, 'marriage_over');
+  assert.equal(scan('wed.deposit', { amount: 100 }, married, { marriage: { ...MARRIAGE_1_2, paidOut: true } }).reason, 'marriage_over');
+  assert.equal(scan('wed.deposit', { amount: 100 }, married, { marriage: null }).reason, 'marriage_over');
+  assert.equal(scan('wed.deposit', { amount: 400 }, { ...married, money: 399 }).reason, 'poor');
+  const dep = getStation('wed.deposit');
+  assert.deepEqual(missingFields(dep, sanitizeInputs(dep, {})), ['amount']);
+  assert.equal(sanitizeInputs(dep, { amount: 9999 }).amount, 500);
+  assert.equal(sanitizeInputs(dep, { amount: 1 }).amount, 100);
+});
+
+test('divorce: divorcer gets pot x 1.5, -3 happiness, -10 apples; the other +3 happiness, +10 apples', () => {
+  const marriage = { ...MARRIAGE_1_2, pot: 700, deposits: { 1: 200, 2: 500 } };
+  const me = baseGroup({ married: true, marriageId: 'm_x', money: 100, food: 5, happiness: 10 });
+  const partner = baseGroup({ married: true, marriageId: 'm_x', food: 2, happiness: 4 });
+  const d = scan('wed.divorce', {}, me, { groupId: '1', marriage, partners: { 2: partner } });
+  assert.equal(d.ok, true);
+  assert.deepEqual(deltas(d), { money: 1050, food: -5, happiness: -3 });
+  assert.equal(d.groupUpdate.food, 0);
+  assert.deepEqual(d.partnerUpdates, { 2: { married: false, marriageId: null, happiness: 7, food: 8 } });
+  assert.equal(d.marriageWrite.hasDivorced, true);
+  assert.equal(d.marriageWrite.pot, 0);
+  assert.equal(d.marriageWrite.potAtDivorce, 700);
+  // pot x 1.5 rounds to whole dollars
+  assert.equal(scan('wed.divorce', {}, me, { groupId: '1', marriage: { ...MARRIAGE_1_2, pot: 333 } }).summary.money, 500);
+  // a wedding the partner never scanned is just cancelled
+  const half = scan('wed.divorce', {}, me, { groupId: '1', marriage: { participants: ['1'] } });
+  assert.deepEqual(deltas(half), { money: 0, food: 0, happiness: 0 });
+  assert.equal(half.groupUpdate.married, false);
+});
+
+test('marriage payout: each partner gets pot x 2 and +10 apples, once', () => {
+  const m = { ...MARRIAGE_1_2, pot: 600 };
+  const r = resolveMarriagePayout(m, { 1: baseGroup({ money: 100, food: 3 }), 2: baseGroup({ money: 0, food: 0 }) });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.updates, { 1: { money: 1300, food: 8 }, 2: { money: 1200, food: 8 } });
+  assert.equal(r.marriageWrite.paidOut, true);
+  assert.equal(r.marriageWrite.pot, 0);
+  assert.equal(resolveMarriagePayout(r.marriageWrite, { 1: baseGroup(), 2: baseGroup() }).reason, 'marriage_over');
+  assert.equal(resolveMarriagePayout({ ...m, hasDivorced: true }, {}).reason, 'marriage_over');
+  assert.equal(resolveMarriagePayout({ participants: ['1'], pot: 0 }, { 1: baseGroup() }).reason, 'marriage_not_ready');
+  assert.equal(resolveMarriagePayout(m, { 1: baseGroup() }).reason, 'missing_group');
+  // a pot-less marriage still pays the apples
+  assert.deepEqual(resolveMarriagePayout({ ...m, pot: 0 }, { 1: baseGroup({ food: 0 }), 2: baseGroup({ food: 0 }) }).updates[1], { money: 1000, food: 8 });
+});
+
+test('final will vote: tally, ties, no self-votes; only the winner can scan', () => {
+  const t = tallyVotes([
+    { voter: '1', for: 3 }, { voter: '2', for: 3 }, { voter: '3', for: 1 }, { voter: '4', for: 1 },
+    { voter: '5', for: 5 }, { voter: '6', for: 99 }, { voter: 'x', for: 2 },
+  ]);
+  assert.deepEqual(t.rows, [{ group: 1, count: 2 }, { group: 3, count: 2 }]);
+  assert.deepEqual(t.leaders, [1, 3], 'a tie is reported, not silently broken');
+  assert.deepEqual(tallyVotes([{ voter: '1', for: 2 }]).leaders, [2]);
+  assert.deepEqual(tallyVotes([]).leaders, []);
+  const fw = (gid, voting, holders = []) => scan('secret.finalWill', {}, baseGroup(), { groupId: gid, voting, limit: { holders } });
+  assert.equal(fw('2', { status: 'done', winner: 3 }).reason, 'not_vote_winner');
+  assert.ok(reasonMessage('not_vote_winner', { winner: 3 }).includes('Group 3'));
+  assert.equal(fw('3', { status: 'done', winner: 3 }).summary.money, 1000);
+  assert.equal(fw('2', null).ok, true, 'with no in-app vote, the QR still works (paper vote)');
+  assert.equal(fw('3', { status: 'done', winner: 3 }, ['3']).reason, 'already_done');
+});
+
+test('group count: defaults to 10', () => {
+  assert.equal(DEFAULT_GROUP_COUNT, 10);
 });
 
 test('limits: every limited station declares its limitKey, and the max matches LIMITS', () => {
@@ -392,7 +553,7 @@ test('divorce: ends the marriage for both groups; needs a marriage', () => {
   assert.equal(d.groupUpdate.married, false);
   assert.equal(d.groupUpdate.marriageId, null);
   assert.equal(d.marriageWrite.hasDivorced, true);
-  assert.deepEqual(d.partnerUpdates, { 7: { married: false, marriageId: null } });
+  assert.deepEqual(d.partnerUpdates, { 7: { married: false, marriageId: null, happiness: 13, food: 8 } });
   assert.equal(scan('wed.divorce', {}, baseGroup()).reason, 'not_married');
   // a partner who has since remarried someone else is left alone
   const moved = scan('wed.divorce', {}, me, {
@@ -408,6 +569,10 @@ test('planReads: fetches exactly the documents a decision needs', () => {
   assert.deepEqual(p('illegal.assassin', {}), { limitKey: 'assassin' });
   assert.deepEqual(p('wed.wedding', {}), { marriageId: 'm_qrABCDEF12' });
   assert.deepEqual(p('wed.divorce', {}, { marriageId: 'm_z' }), { marriageId: 'm_z', readPartners: true });
+  assert.deepEqual(p('wed.deposit', { amount: 100 }, { marriageId: 'm_z' }), { marriageId: 'm_z' });
+  assert.deepEqual(p('shop.donate', { apples: 1 }), { poolKey: 'apples' });
+  assert.deepEqual(p('shop.receive', { apples: 1 }), { poolKey: 'apples' });
+  assert.deepEqual(p('secret.finalWill', {}), { limitKey: 'finalWill', votingId: 'finalWill' });
   assert.deepEqual(p('ent.sauna', {}), {});
 });
 
@@ -439,6 +604,9 @@ test('ICPASS tax: over $2000 -10%, under $1000 +10%, everyone +1 happiness, roun
 test('adjustment: floors at 0, caps apples, sets education outright', () => {
   const r = resolveAdjustment(baseGroup({ money: 100, food: 7, happiness: 2 }), { money: -500, food: 5, happiness: -9, education: 2 });
   assert.deepEqual(r.groupUpdate, { money: 0, food: 8, happiness: 0, education: 2 });
+  const c = resolveAdjustment(baseGroup({ cooldowns: { jobs_banker: T0 } }), { clearCooldowns: true });
+  assert.deepEqual(c.groupUpdate.cooldowns, {});
+  assert.ok(summaryText(c.summary).includes('Cooldowns cleared'));
   assert.equal(resolveAdjustment(baseGroup(), { education: 9 }).groupUpdate.education, undefined);
 });
 
@@ -472,9 +640,9 @@ test('payload: qr ids are unique and path-safe', () => {
 
 test('inputs: garbage is clamped or rejected, never trusted', () => {
   const police = getStation('jobs.police');
-  assert.deepEqual(sanitizeInputs(police, { smugglers: 9999, robbery: 'yes', extra: 1 }), { smugglers: 20, robbery: false });
-  assert.deepEqual(sanitizeInputs(police, { smugglers: -4 }), { smugglers: 0, robbery: false });
-  assert.deepEqual(sanitizeInputs(police, { smugglers: 'x' }), { smugglers: 0, robbery: false });
+  assert.deepEqual(sanitizeInputs(police, { smugglers: 9999, robbery: 'yes', extra: 1 }), { smugglers: 20 });
+  assert.deepEqual(sanitizeInputs(police, { smugglers: -4 }), { smugglers: 0 });
+  assert.deepEqual(sanitizeInputs(police, { smugglers: 'x' }), { smugglers: 0 });
   const pf = getStation('college.primary');
   assert.deepEqual(sanitizeInputs(pf, { result: 'PASS' }), { result: null });
   assert.equal(isComplete(pf, sanitizeInputs(pf, {})), false);
@@ -496,9 +664,10 @@ test('wording: every reason, station and summary renders', () => {
   const reasons = ['missing_group', 'already_scanned', 'needs_education', 'already_qualified', 'too_rich',
     'needs_gymMember', 'already_gymMember', 'already_married', 'not_married', 'marriage_full', 'marriage_over',
     'already_done', 'cooldown', 'limit_reached', 'hungry', 'sad', 'poor', 'outdated', 'old_qr', 'incomplete_qr',
-    'unknown_station', 'busy', 'internal', 'whatever'];
+    'unknown_station', 'busy', 'internal', 'apples_full', 'pool_empty', 'marriage_not_ready', 'not_vote_winner',
+    'missing_partner', 'whatever'];
   for (const r of reasons) {
-    const m = reasonMessage(r, { level: 2, value: 500, minutes: 3, key: 'phd' });
+    const m = reasonMessage(r, { level: 2, value: 500, minutes: 3, key: 'phd', label: 'Banker', room: 2, count: 1, winner: 4 });
     assert.ok(typeof m === 'string' && m.length > 5 && !m.includes('undefined'), `${r}: "${m}"`);
   }
   for (const key of Object.keys(LIMITS)) assert.ok(!reasonMessage('limit_reached', { key }).includes('undefined'));
@@ -531,7 +700,7 @@ test('fuzz: 200k random scans never throw and never break an invariant', () => {
       gymMember: r() < 0.5,
       raffleTickets: Math.floor(r() * 10),
       once: r() < 0.3 ? { teacher: true, artist: r() < 0.5 } : {},
-      cooldowns: r() < 0.3 ? { foodDelivery: T0 - Math.floor(r() * 40) * MINUTE } : {},
+      cooldowns: r() < 0.3 ? { [cooldownKeyFor(station.id)]: T0 - Math.floor(r() * 40) * MINUTE } : {},
     };
     // half the time sensible inputs, half the time garbage
     const inputs = {};
@@ -545,7 +714,14 @@ test('fuzz: 200k random scans never throw and never break an invariant', () => {
       }
     }
     const limit = r() < 0.5 ? { holders: ['2', '3'].slice(0, Math.floor(r() * 3)) } : null;
-    const marriage = r() < 0.5 ? { participants: ['1', '4'].slice(0, Math.floor(r() * 3)), hasDivorced: r() < 0.2 } : null;
+    const marriage = r() < 0.5 ? {
+      participants: ['1', '4'].slice(0, Math.floor(r() * 3)),
+      hasDivorced: r() < 0.2,
+      paidOut: r() < 0.1,
+      pot: pick([undefined, 0, 100, 777, -5, 'x']),
+    } : null;
+    const pool = r() < 0.5 ? { count: pick([0, 1, 3, 8, -2, 'x', undefined]) } : null;
+    const voting = r() < 0.3 ? { status: 'done', winner: pick([1, 2, 3, null]) } : null;
     const groupId = String(1 + Math.floor(r() * MAX_GROUPS));
 
     let res;
@@ -553,7 +729,9 @@ test('fuzz: 200k random scans never throw and never break an invariant', () => {
       res = resolveScan({
         station, group, groupId, limit, marriage,
         payload: buildPayload(station.id, inputs, 'fuzzQR0001', T0),
-        partners: { 4: { marriageId: 'm_q' } },
+        partners: { 4: { marriageId: 'm_q', food: Math.floor(r() * 9), happiness: Math.floor(r() * 9) } },
+        pool,
+        voting,
       });
     } catch (e) {
       assert.fail(`threw on ${station.id} ${JSON.stringify(inputs)}: ${e.stack}`);
@@ -574,7 +752,12 @@ test('fuzz: 200k random scans never throw and never break an invariant', () => {
     // a cost is never partially applied: without a penalty, money and
     // happiness move by exactly the station's stated amount
     const e = effectOf(station, res.inputs);
-    if (!e.penalty) {
+    for (const pu of Object.values(res.partnerUpdates)) {
+      for (const k of ['food', 'happiness']) if (k in pu) assert.ok(pu[k] >= 0 && (k !== 'food' || pu[k] <= APPLE_MAX));
+    }
+    if (res.poolUpdate) assert.ok(res.poolUpdate.count >= 0, `${station.id}: pool ${res.poolUpdate.count}`);
+    if (res.marriageWrite) assert.ok(!(res.marriageWrite.pot < 0), `${station.id}: pot`);
+    if (!e.penalty && e.marriage !== 'divorce') {
       assert.equal(res.summary.money, e.money, `${station.id}: money`);
       assert.equal(res.summary.happiness, e.happiness, `${station.id}: happiness`);
       if (e.food <= 0) assert.equal(res.summary.food, e.food, `${station.id}: food`);

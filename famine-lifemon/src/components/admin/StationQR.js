@@ -65,6 +65,20 @@ function LimitStatus({ limitKey }) {
   );
 }
 
+function PoolStatus({ poolKey }) {
+  const [data] = useDocumentData(doc(db, 'pools', poolKey));
+  const n = Number(data?.count) || 0;
+  return <Alert severity={n ? 'info' : 'warning'}>Donation box: <strong>{n}</strong> apple{n === 1 ? '' : 's'}.</Alert>;
+}
+
+function VoteStatus() {
+  const [voting] = useDocumentData(doc(db, 'voting', 'finalWill'));
+  if (voting?.status === 'done') {
+    return <Alert severity="success">Vote winner: <strong>Group {voting.winner}</strong>. Only they can scan this QR.</Alert>;
+  }
+  return <Alert severity="warning">No winner announced yet (Live events → The Final Will vote).</Alert>;
+}
+
 export default function StationQR() {
   const [stageId, setStageId] = useState('');
   const [stationId, setStationId] = useState('');
@@ -114,6 +128,8 @@ export default function StationQR() {
         <>
           {station.notes && <Alert severity={station.custom ? 'warning' : 'info'}>{station.notes}</Alert>}
           {station.limitKey && <LimitStatus limitKey={station.limitKey} />}
+          {station.poolKey && <PoolStatus poolKey={station.poolKey} />}
+          {station.id === 'secret.finalWill' && <VoteStatus />}
 
           {station.fields.map((f) => (
             <Field key={f.key} field={f} value={raw[f.key]} onChange={(v) => setField(f.key, v)} />

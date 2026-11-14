@@ -2,11 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { Box, Chip, Paper, Stack, Typography } from '@mui/material';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 
-import { APPLE_MAX, EDU, EDUCATION_LABELS, MINUTE } from '../game/catalog.js';
+import {
+	APPLE_MAX, EDU, EDUCATION_LABELS, MINUTE, cooldownLabel, cooldownMsFor,
+} from '../game/catalog.js';
 
 const theme = createTheme({ typography: { fontFamily: 'Karla, sans-serif' } });
-
-const FOOD_DELIVERY_COOLDOWN = 20 * MINUTE;
 
 function Row({ label, children }) {
 	return (
@@ -46,14 +46,24 @@ function useNow(intervalMs = 30000) {
 	return now;
 }
 
-export default function Stats({ snapshot, loading, groupId }) {
+export default function Stats({ snapshot, loading, groupId, marriage }) {
 	const now = useNow();
 	const g = snapshot || {};
 	const value = (node) => (loading ? <Typography fontSize={14}>Loading...</Typography> : node);
 
 	const edu = Math.max(EDU.NONE, Math.min(EDU.PHD, Math.floor(Number(g.education) || 0)));
-	const lastDelivery = Number(g.cooldowns?.foodDelivery) || 0;
-	const deliveryWait = lastDelivery ? Math.ceil((FOOD_DELIVERY_COOLDOWN - (now - lastDelivery)) / MINUTE) : 0;
+	// "Play again in N min" for every station this group is cooling down on,
+	// so a helper can check the passport before the group plays.
+	const waits = Object.entries(g.cooldowns || {})
+		.map(([key, at]) => ({ key, min: Math.ceil((cooldownMsFor(key) - (now - (Number(at) || 0))) / MINUTE) }))
+		.filter((w) => w.min > 0)
+		.sort((a, b) => a.min - b.min);
+
+	const me = String(groupId ?? g.group ?? '');
+	const partner = g.married && Array.isArray(marriage?.participants)
+		? marriage.participants.map(String).find((p) => p !== me)
+		: null;
+	const myDeposits = Number(marriage?.deposits?.[me]) || 0;
 
 	const chips = [];
 	if (edu === EDU.PHD) chips.push({ label: '⚡ PhD: line priority at every minigame', color: 'warning' });
@@ -61,7 +71,8 @@ export default function Stats({ snapshot, loading, groupId }) {
 	if (g.raffleTickets > 0) chips.push({ label: `🎟 ${g.raffleTickets} raffle ticket${g.raffleTickets === 1 ? '' : 's'}` });
 	if (g.once?.teacher) chips.push({ label: '✓ Teacher pay received' });
 	if (g.once?.artist) chips.push({ label: '✓ Concert performed' });
-	if (deliveryWait > 0) chips.push({ label: `🛵 Food delivery again in ${deliveryWait} min` });
+	if (g.married && myDeposits > 0) chips.push({ label: `🏦 You have put $${myDeposits.toLocaleString('en-US')} in the marriage pot` });
+	waits.forEach((w) => chips.push({ label: `⏳ ${cooldownLabel(w.key)} again in ${w.min} min` }));
 
 	return (
 		<ThemeProvider theme={theme}>
@@ -97,7 +108,7 @@ export default function Stats({ snapshot, loading, groupId }) {
 				<Row label={<span style={{ color: '#fff', fontWeight: 300 }}>Marital status</span>}>
 					{value(
 						<Typography sx={{ fontSize: 15, fontWeight: 800, color: '#fff' }}>
-							{g.married ? '💍 MARRIED' : 'SINGLE'}
+							{g.married ? `💍 MARRIED${partner ? ` TO GROUP ${partner}` : ' (waiting for partner to scan)'}` : 'SINGLE'}
 						</Typography>,
 					)}
 				</Row>

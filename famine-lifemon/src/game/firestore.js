@@ -12,10 +12,10 @@ import {
   collection, deleteDoc, doc, getDocs, runTransaction, setDoc, writeBatch,
 } from 'firebase/firestore';
 
-import { MAX_GROUPS, getStation } from './catalog.js';
+import { DEFAULT_GROUP_COUNT, MAX_GROUPS, getStation } from './catalog.js';
 import {
   eventRedemptionIdFor, isValidGroupId, newQrId, planReads, randomProfile,
-  redemptionIdFor, resolveAdjustment, resolveGlobalEvent, resolveScan,
+  redemptionIdFor, resolveAdjustment, resolveGlobalEvent, resolveMarriagePayout, resolveScan,
 } from './engine.js';
 
 // Firestore serialises concurrent transactions on one document, but its own
@@ -90,7 +90,23 @@ export async function performScan(db, groupId, payload) {
       }
     }
 
-    const result = resolveScan({ station, payload, group, groupId: gid, limit, marriage, partners });
+    let voting = null;
+    if (plan.votingId) {
+      const s = await tx.get(doc(db, 'voting', plan.votingId));
+      voting = s.exists() ? s.data() : null;
+    }
+
+    let pool = null;
+    let poolRef = null;
+    if (plan.poolKey) {
+      poolRef = doc(db, 'pools', plan.poolKey);
+      const s = await tx.get(poolRef);
+      pool = s.exists() ? s.data() : null;
+    }
+
+    const result = resolveScan({
+      station, payload, group, groupId: gid, limit, marriage, partners, pool, voting,
+    });
     if (!result.ok) return result;
 
     tx.update(groupRef, result.groupUpdate);
@@ -106,6 +122,7 @@ export async function performScan(db, groupId, payload) {
     }));
     if (result.limitUpdate) tx.set(limitRef, result.limitUpdate);
     if (result.marriageWrite) tx.set(marriageRef, clean(result.marriageWrite));
+    if (result.poolUpdate) tx.set(poolRef, result.poolUpdate);
     for (const [p, update] of Object.entries(result.partnerUpdates)) {
       tx.update(doc(db, 'groups', p), update);
     }
@@ -179,6 +196,70 @@ export async function performGlobalEvent(db, eventId) {
   })).catch((e) => ({ gid, status: 'failed', reason: e?.code || String(e) }))));
 }
 
+// --------------------------------------------------------- marriage payout ---
+
+// End of game: every complete marriage pays each partner pot x 2 and +10
+// apples. Idempotent: a paid marriage is marked paidOut and skipped.
+export async function performMarriagePayout(db) {
+  const snap = await getDocs(collection(db, 'marriages'));
+  return Promise.all(snap.docs.map((m) => withRetry(() => runTransaction(db, async (tx) => {
+    const ref = doc(db, 'marriages', m.id);
+    const ms = await tx.get(ref);
+    if (!ms.exists()) return { id: m.id, status: 'missing' };
+    const marriage = ms.data();
+    if (marriage.paidOut) return { id: m.id, status: 'skipped' };
+    if (marriage.hasDivorced) return { id: m.id, status: 'divorced' };
+    const parts = (marriage.participants || []).map(String).filter(isValidGroupId);
+    const groups = {};
+    for (const p of parts) {
+      const gs = await tx.get(doc(db, 'groups', p));
+      if (gs.exists()) groups[p] = gs.data();
+    }
+    const result = resolveMarriagePayout(marriage, groups);
+    if (!result.ok) return { id: m.id, status: 'not_ready', participants: parts };
+    for (const [p, update] of Object.entries(result.updates)) {
+      tx.update(doc(db, 'groups', p), update);
+      tx.set(doc(db, 'redemptions', `payout_${m.id}_${p}`), clean({
+        kind: 'payout', groupId: p, marriageId: m.id, pot: result.pot, at: Date.now(), summary: result.summaries[p],
+      }));
+    }
+    tx.set(ref, clean(result.marriageWrite));
+    return { id: m.id, status: 'applied', pot: result.pot, participants: parts, summaries: result.summaries };
+  })).catch((e) => ({ id: m.id, status: 'failed', reason: e?.code || String(e) }))));
+}
+
+// -------------------------------------------------------- final will vote ---
+
+const votingRef = (db) => doc(db, 'voting', 'finalWill');
+
+// Opening the vote clears any earlier votes, so a re-run starts from zero.
+export async function openVoting(db) {
+  await deleteAll(db, 'votes');
+  await setDoc(votingRef(db), { status: 'open', openedAt: Date.now(), winner: null, room: '' });
+}
+
+export const closeVoting = (db) => setDoc(votingRef(db), { status: 'closed', closedAt: Date.now() }, { merge: true });
+
+export async function announceWinner(db, winner, room) {
+  const w = Number(winner);
+  const where = String(room || '').trim();
+  await setDoc(votingRef(db), { status: 'done', winner: w, room: where, announcedAt: Date.now() }, { merge: true });
+  await broadcast(db, `🗳 The Final Will goes to Group ${w}! Group ${w}: go to ${where || 'the helper'} to scan the QR for your $1000.`, 'alert');
+}
+
+export const castVote = (db, voter, forGroup) =>
+  setDoc(doc(db, 'votes', String(voter)), { voter: String(voter), for: Number(forGroup), at: Date.now() });
+
+// ----------------------------------------------------------------- config ---
+
+export const clampGroupCount = (n) => {
+  const v = Math.trunc(Number(n));
+  return Number.isFinite(v) && v >= 1 ? Math.min(v, MAX_GROUPS) : DEFAULT_GROUP_COUNT;
+};
+
+export const setGroupCount = (db, n) =>
+  setDoc(doc(db, 'config', 'game'), { groupCount: clampGroupCount(n) }, { merge: true });
+
 // ---------------------------------------------------------- announcements ---
 
 export const broadcast = (db, message, kind = 'info') =>
@@ -189,20 +270,26 @@ export const clearBroadcast = (db) => deleteDoc(doc(db, 'announcements', 'curren
 // ------------------------------------------------------------------ reset ---
 
 // Wipes the game back to "nobody has joined". The legacy 2024 `users`
-// collection is deliberately left alone.
-export const GAME_COLLECTIONS = ['redemptions', 'limits', 'marriages', 'announcements', 'groups'];
+// collection and the group-count setting are deliberately left alone.
+export const GAME_COLLECTIONS = [
+  'redemptions', 'limits', 'marriages', 'pools', 'votes', 'voting', 'announcements', 'groups',
+];
+
+async function deleteAll(db, name) {
+  let deleted = 0;
+  const snap = await getDocs(collection(db, name));
+  for (let i = 0; i < snap.docs.length; i += 400) {
+    const batch = writeBatch(db);
+    const chunk = snap.docs.slice(i, i + 400);
+    chunk.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+    deleted += chunk.length;
+  }
+  return deleted;
+}
 
 export async function resetGame(db) {
   let deleted = 0;
-  for (const name of GAME_COLLECTIONS) {
-    const snap = await getDocs(collection(db, name));
-    for (let i = 0; i < snap.docs.length; i += 400) {
-      const batch = writeBatch(db);
-      const chunk = snap.docs.slice(i, i + 400);
-      chunk.forEach((d) => batch.delete(d.ref));
-      await batch.commit();
-      deleted += chunk.length;
-    }
-  }
+  for (const name of GAME_COLLECTIONS) deleted += await deleteAll(db, name);
   return deleted;
 }

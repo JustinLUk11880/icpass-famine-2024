@@ -1,15 +1,17 @@
 import React, { useState } from 'react';
 import {
-  Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Paper,
-  Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Typography,
+  Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel,
+  MenuItem, Paper, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Typography,
 } from '@mui/material';
-import { collection, limit, orderBy, query } from 'firebase/firestore';
-import { useCollection } from 'react-firebase-hooks/firestore';
+import { collection, doc, limit, orderBy, query } from 'firebase/firestore';
+import { useCollection, useDocumentData } from 'react-firebase-hooks/firestore';
 
 import { db } from '../../database/firebase';
 import { EDUCATION_LABELS, LIMITS, MAX_GROUPS, getStation } from '../../game/catalog.js';
-import { GLOBAL_EVENTS, isValidGroupId, reasonMessage, summaryText } from '../../game/engine.js';
-import { createGroups, performAdjust, resetGame } from '../../game/firestore.js';
+import { GLOBAL_EVENTS, isValidGroupId, potOf, reasonMessage, summaryText } from '../../game/engine.js';
+import {
+  clampGroupCount, createGroups, performAdjust, resetGame, setGroupCount,
+} from '../../game/firestore.js';
 
 const H = ({ children }) => (
   <Typography variant="h6" fontWeight={800} sx={{ mb: 1 }}>{children}</Typography>
@@ -32,6 +34,7 @@ function activityLine(r) {
   const who = `Group ${r.groupId}`;
   const what = summaryText(r.summary || {});
   if (r.kind === 'event') return `${who} · ${GLOBAL_EVENTS[r.eventId]?.label || r.eventId} · ${what}`;
+  if (r.kind === 'payout') return `${who} · Marriage payout (pot $${r.pot}) · ${what}`;
   if (r.kind === 'adjust') return `${who} · Manual${r.note ? `: ${r.note}` : ''} · ${what}`;
   const station = getStation(r.stationId);
   const opt = optionText(station, r.inputs);
@@ -42,6 +45,7 @@ function Adjust({ groupIds }) {
   const [gid, setGid] = useState('');
   const [d, setD] = useState({ money: '', food: '', happiness: '', education: '' });
   const [note, setNote] = useState('');
+  const [clearCd, setClearCd] = useState(false);
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
   const set = (k) => (e) => setD((x) => ({ ...x, [k]: e.target.value }));
@@ -55,12 +59,14 @@ function Adjust({ groupIds }) {
         food: Number(d.food) || 0,
         happiness: Number(d.happiness) || 0,
         education: d.education === '' ? null : Number(d.education),
+        clearCooldowns: clearCd,
       }, note);
       if (!res.ok) setMsg({ severity: 'error', text: reasonMessage(res.reason) });
       else {
         setMsg({ severity: 'success', text: `Group ${gid}: ${summaryText(res.summary)}` });
         setD({ money: '', food: '', happiness: '', education: '' });
         setNote('');
+        setClearCd(false);
       }
     } catch (e) {
       setMsg({ severity: 'error', text: String(e?.message || e) });
@@ -69,7 +75,7 @@ function Adjust({ groupIds }) {
     }
   };
 
-  const nothing = !d.money && !d.food && !d.happiness && d.education === '';
+  const nothing = !d.money && !d.food && !d.happiness && d.education === '' && !clearCd;
   return (
     <Paper variant="outlined" sx={{ p: 2 }}>
       <Typography fontWeight={800} sx={{ mb: 0.5 }}>Fix a mistake / award a prize</Typography>
@@ -89,6 +95,10 @@ function Adjust({ groupIds }) {
           <MenuItem value="">No change</MenuItem>
           {EDUCATION_LABELS.map((l, i) => <MenuItem key={l} value={String(i)}>{l}</MenuItem>)}
         </TextField>
+        <FormControlLabel
+          control={<Checkbox checked={clearCd} onChange={(e) => setClearCd(e.target.checked)} />}
+          label="Clear this group's cooldowns (lets them replay a station now)"
+        />
         <TextField size="small" label="Reason (shown in the activity log)" value={note} onChange={(e) => setNote(e.target.value)} />
         <Button variant="contained" disabled={!gid || nothing || busy} onClick={apply}>
           {busy ? 'Applying...' : 'Apply'}
@@ -169,7 +179,7 @@ function Reset() {
     <Paper variant="outlined" sx={{ p: 2, borderColor: 'error.light' }}>
       <Typography fontWeight={800} color="error" sx={{ mb: 0.5 }}>Reset the whole game</Typography>
       <Typography fontSize={13} color="text.secondary" sx={{ mb: 1.5 }}>
-        Deletes every group, scan, marriage, limit and announcement. Use before the event starts.
+        Deletes every group, scan, marriage, vote, limit, donated apple and announcement. Keeps the number of groups. Use before the event starts.
       </Typography>
       <Button color="error" variant="outlined" onClick={() => setOpen(true)}>Reset game...</Button>
       {done && <Alert severity="info" sx={{ mt: 1.5 }}>{done}</Alert>}
@@ -190,14 +200,39 @@ function Reset() {
   );
 }
 
+function GroupCount() {
+  const [config] = useDocumentData(doc(db, 'config', 'game'));
+  const current = clampGroupCount(config?.groupCount);
+  const [value, setValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true);
+    try { await setGroupCount(db, Number(value)); setValue(''); } finally { setBusy(false); }
+  };
+  return (
+    <Paper variant="outlined" sx={{ p: 2 }}>
+      <Typography fontWeight={800} sx={{ mb: 0.5 }}>Number of groups: {current}</Typography>
+      <Typography fontSize={13} color="text.secondary" sx={{ mb: 1.5 }}>
+        How many groups appear in the join list and the vote (1 to {MAX_GROUPS}).
+      </Typography>
+      <Stack direction="row" spacing={1}>
+        <TextField size="small" type="number" label="Change to" value={value} onChange={(e) => setValue(e.target.value)} inputProps={{ min: 1, max: MAX_GROUPS }} sx={{ width: 160 }} />
+        <Button variant="outlined" disabled={busy || !(Number(value) >= 1 && Number(value) <= MAX_GROUPS)} onClick={save}>Save</Button>
+      </Stack>
+    </Paper>
+  );
+}
+
 function CreateGroups() {
-  const [count, setCount] = useState('10');
+  const [config] = useDocumentData(doc(db, 'config', 'game'));
+  const [count, setCount] = useState('');
+  const effective = count === '' ? String(clampGroupCount(config?.groupCount)) : count;
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
   const run = async () => {
     setBusy(true);
     try {
-      const n = await createGroups(db, Number(count));
+      const n = await createGroups(db, Number(effective));
       setMsg(`${n} new group${n === 1 ? '' : 's'} created with random starting profiles. Existing groups were left alone.`);
     } catch (e) {
       setMsg(`Failed: ${e?.message || e}`);
@@ -213,8 +248,8 @@ function CreateGroups() {
         Otherwise a group is created when its first member joins.
       </Typography>
       <Stack direction="row" spacing={1}>
-        <TextField size="small" type="number" label="How many groups" value={count} onChange={(e) => setCount(e.target.value)} inputProps={{ min: 1, max: MAX_GROUPS }} sx={{ width: 160 }} />
-        <Button variant="outlined" disabled={busy || !(Number(count) >= 1)} onClick={run}>{busy ? 'Creating...' : 'Create'}</Button>
+        <TextField size="small" type="number" label="How many groups" value={effective} onChange={(e) => setCount(e.target.value)} inputProps={{ min: 1, max: MAX_GROUPS }} sx={{ width: 160 }} />
+        <Button variant="outlined" disabled={busy || !(Number(effective) >= 1)} onClick={run}>{busy ? 'Creating...' : 'Create'}</Button>
       </Stack>
       {msg && <Alert severity="info" sx={{ mt: 1.5 }}>{msg}</Alert>}
     </Paper>
@@ -225,6 +260,10 @@ export default function GroupsPanel() {
   const [groupsSnap] = useCollection(collection(db, 'groups'));
   const [limitsSnap] = useCollection(collection(db, 'limits'));
   const [logSnap] = useCollection(query(collection(db, 'redemptions'), orderBy('at', 'desc'), limit(40)));
+  const [marriagesSnap] = useCollection(collection(db, 'marriages'));
+  const [pool] = useDocumentData(doc(db, 'pools', 'apples'));
+  const marriages = (marriagesSnap?.docs || []).map((d) => ({ id: d.id, ...d.data() }));
+  const now = Date.now();
 
   const groups = (groupsSnap?.docs || [])
     .filter((d) => isValidGroupId(d.id))
@@ -261,7 +300,8 @@ export default function GroupsPanel() {
                   <TableCell>{EDUCATION_LABELS[g.education] ?? '?'}</TableCell>
                   <TableCell sx={{ fontSize: 12 }}>
                     {[g.married && '💍', g.gymMember && '🏋️', g.raffleTickets > 0 && `🎟${g.raffleTickets}`,
-                      g.once?.teacher && 'teacher✓', g.once?.artist && 'artist✓'].filter(Boolean).join(' ')}
+                      g.once?.teacher && 'teacher✓', g.once?.artist && 'artist✓',
+                      Object.values(g.cooldowns || {}).some((t) => now - Number(t) < 30 * 60000) && '⏳'].filter(Boolean).join(' ')}
                   </TableCell>
                 </TableRow>
               ))}
@@ -286,6 +326,26 @@ export default function GroupsPanel() {
         </Stack>
       </Box>
 
+      <Box>
+        <H>Marriages and donation box</H>
+        <Typography fontSize={14} sx={{ mb: 1 }}>🍎 Donation box: <strong>{Number(pool?.count) || 0}</strong> apple(s)</Typography>
+        {marriages.length === 0 ? (
+          <Typography fontSize={14}>No marriages yet.</Typography>
+        ) : (
+          <Box component="ul" sx={{ fontFamily: 'Roboto, Helvetica, Arial, sans-serif', fontSize: 14, m: 0, pl: 2.5 }}>
+            {marriages.map((m) => {
+              const parts = (m.participants || []).map(String);
+              const dep = Object.entries(m.deposits || {}).map(([g, v]) => `G${g} $${v}`).join(', ');
+              const state = m.hasDivorced ? `divorced by group ${m.dissolvedBy} (pot was $${m.potAtDivorce || 0})`
+                : m.paidOut ? `paid out (pot was $${m.potAtPayout || 0})`
+                  : parts.length < 2 ? 'waiting for the second group to scan'
+                    : `pot $${potOf(m).toLocaleString('en-US')}${dep ? ` (${dep})` : ''}`;
+              return <li key={m.id}>Groups {parts.join(' + ') || '?'}: {state}</li>;
+            })}
+          </Box>
+        )}
+      </Box>
+
       <Adjust groupIds={groups.map((g) => String(g.id))} />
       <Raffle groups={groups} />
 
@@ -307,6 +367,7 @@ export default function GroupsPanel() {
         </Paper>
       </Box>
 
+      <GroupCount />
       <CreateGroups />
       <Reset />
     </Stack>

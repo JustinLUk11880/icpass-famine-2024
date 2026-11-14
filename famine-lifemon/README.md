@@ -30,8 +30,9 @@ In the Firebase console, enable **Authentication → Sign-in method → Anonymou
 
 ## Running the event
 
-**Before the event:** on `/helper` → Groups, press *Reset game*. Optionally
-*Create groups in advance* to roll every group's random starting profile now.
+**Before the event:** on `/helper` → Groups, set *Number of groups* (default
+10), then press *Reset game*. Optionally *Create groups in advance* to roll
+every group's random starting profile now.
 
 **Joining:** each participant opens the site and picks their group. The first
 member to join rolls the group's starting profile, per the rules: 0–3 apples,
@@ -47,15 +48,27 @@ comes back (gym sets, another police shift). Codes expire after 2 minutes.
 robbery starts), and apply *Pandemic Pass-26* or the *ICPASS Tax* to every
 group. Each group is hit once even if the button is pressed twice.
 
+- **The Final Will (15:40):** *Open voting* puts a voting card on every
+  passport. Each group has one vote (any member can change it until voting
+  closes) and cannot vote for itself. *Close voting*, check the tally (ties are
+  flagged - break them with a wheel), type the room and press *Announce
+  winner*: every phone shows the winner and the room. From then on only the
+  winning group can scan the Final Will QR, so make it in that room.
+- **Pay out marriages (end of LifeMon):** every married couple gets pot x 2
+  and +10 apples each. Pays each marriage once.
+
 **Groups tab:** every group's stats, the PhD / assassin / Final Will places
-taken, *Fix a mistake / award a prize* (also how to pay raffle prizes), the
-raffle draw weighted by tickets, and a log of every scan.
+taken, marriages with their pots, the donation box, *Fix a mistake / award a
+prize* (also how to pay raffle prizes, and *Clear cooldowns* to let a group
+replay a station), the raffle draw weighted by tickets, and a log of every scan.
 
 ## The rules, as implemented
 
 All game logic is in [`src/game/`](src/game): [`catalog.js`](src/game/catalog.js)
 lists every station, [`engine.js`](src/game/engine.js) applies them. Both are
-pure JavaScript shared by the app and the tests.
+pure JavaScript shared by the app and the tests. Numbers come from the
+stations table; where the helper guide disagrees, the table wins (see the
+comment at the top of `catalog.js`).
 
 - **Degrees:** No degree → Primary → Secondary → University → PhD. Each exam
   needs the previous degree; Primary / Secondary / University jobs need that
@@ -65,13 +78,25 @@ pure JavaScript shared by the app and the tests.
   raffle, a job's apple) is refused. Penalties (prisoner's dilemma, banker loss,
   casino loss, divorce, pandemic) are always applied and stop at 0.
 - **Once only:** Teacher, Artist, gym membership. **Event-wide limits:** PhD 2
-  groups, Assassin 1, The Final Will 1. **Cooldown:** food delivery once per 20
-  minutes per group, losses included.
-- **Robbery** only for groups under $500. **Wedding:** both groups scan the same
-  QR; divorce frees both.
-- **Stations the rules document leaves blank** (Nurse, Surgeon, Lawyer,
-  Engineer, Drug, Food bank, Supermarket, Hospital, Bank, Wedding, Divorce):
-  the helper enters the amounts on the day; the degree requirement still applies.
+  groups, Assassin 1, The Final Will 1.
+- **Cooldowns, per group and per station, losses included:** 15 minutes for
+  every game except entertainment; food delivery 20 minutes; marriage bank
+  deposits 30 minutes. No cooldown on penalties (prisoner), shopping, the
+  robbery rewards, food waste, wedding or divorce. The passport shows "X again
+  in N min" so a helper can check before the group plays.
+- **University jobs** (surgeon, banker, lawyer): win +$350, lose -$50, and the
+  work costs 1 apple either way. Engineer: win +$500, 1 apple either way.
+- **Robbery** only for groups under $500; the police who stop it scan
+  *Police: stopped the robbery* (+$500).
+- **Supermarket:** buy apples at the helper's current price ($50-$200), refused
+  if the group cannot hold them; donate apples into a shared box; receive from
+  the box while it has apples.
+- **Wedding and bank:** both groups scan the same wedding QR (free). Each group
+  then deposits $100-$500 into the shared pot, secretly, every 30 minutes.
+  Divorce: the group that scans gets pot x 1.5, -3 happiness, -10 apples; the
+  other group gets +3 happiness, +10 apples. At the end, *Pay out marriages*.
+- **Stations the documents leave blank** (bottle bowling, hospital): the helper
+  enters the amounts on the day.
 - **Awards:** the leaderboard ranks Monopoly (money), Joy Master (happiness)
   and Wellness King/Queen (apples) separately. Raffle tickets are never shown
   to other groups.

@@ -3,15 +3,20 @@ import { Alert, Button, Paper, TextField, MenuItem, Typography } from '@mui/mate
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import Grid from '@mui/material/Grid';
 
+import { doc } from 'firebase/firestore';
+import { useDocumentData } from 'react-firebase-hooks/firestore';
+
 import { db } from '../database/firebase';
-import { MAX_GROUPS } from '../game/catalog.js';
 import { isValidGroupId } from '../game/engine.js';
-import { joinGroup } from '../game/firestore.js';
+import { clampGroupCount, joinGroup } from '../game/firestore.js';
 
 const theme = createTheme({ typography: { fontFamily: 'Ubuntu' } });
-const GROUPS = Array.from({ length: MAX_GROUPS }, (_, i) => i + 1);
 
 export default function JoinGroup({ setGroup }) {
+  // How many groups to offer is set on the helper page (default 10).
+  const [config] = useDocumentData(doc(db, 'config', 'game'));
+  const count = clampGroupCount(config?.groupCount);
+  const GROUPS = Array.from({ length: count }, (_, i) => i + 1);
   const [choice, setChoice] = useState('');
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState(null);

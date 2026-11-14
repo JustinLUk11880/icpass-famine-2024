@@ -55,13 +55,57 @@ service cloud.firestore {
       allow delete: if signedIn();
     }
 
-    // A marriage is between at most two groups.
+    // A marriage is between at most two groups; its bank pot is never negative.
     match /marriages/{id} {
       allow read: if signedIn();
       allow create, update: if signedIn()
                             && request.resource.data.participants is list
-                            && request.resource.data.participants.size() <= 2;
+                            && request.resource.data.participants.size() <= 2
+                            && (!('pot' in request.resource.data)
+                                || (request.resource.data.pot is number && request.resource.data.pot >= 0));
       allow delete: if signedIn();
+    }
+
+    // Shared supermarket donation box.
+    match /pools/{key} {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+                            && request.resource.data.count is number
+                            && request.resource.data.count >= 0
+                            && request.resource.data.count <= 1000;
+      allow delete: if signedIn();
+    }
+
+    // The Final Will vote: open / closed / done (winner announced).
+    match /voting/{id} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && request.resource.data.status in ['open', 'closed', 'done'];
+      allow delete: if signedIn();
+    }
+
+    // One vote per group, changeable only while voting is open, never for
+    // your own group.
+    match /votes/{groupId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+                            && validGroupId(groupId)
+                            && request.resource.data.voter == groupId
+                            && request.resource.data['for'] is int
+                            && request.resource.data['for'] >= 1
+                            && request.resource.data['for'] <= 20
+                            && request.resource.data['for'] != int(groupId)
+                            && get(/databases/$(database)/documents/voting/finalWill).data.status == 'open';
+      allow delete: if signedIn();
+    }
+
+    // Helper-page settings: how many groups appear in the join list.
+    match /config/{id} {
+      allow read: if signedIn();
+      allow delete: if signedIn();
+      allow create, update: if signedIn()
+                   && request.resource.data.groupCount is int
+                   && request.resource.data.groupCount >= 1
+                   && request.resource.data.groupCount <= 20;
     }
 
     // The banner pushed to every phone from the helper page.
