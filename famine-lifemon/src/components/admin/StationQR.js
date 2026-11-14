@@ -10,7 +10,7 @@ import { db } from '../../database/firebase';
 import { debug } from '../secret/Secret';
 import { LIMITS, STAGES, getStation, stationsForStage } from '../../game/catalog.js';
 import {
-  buildPayload, describeStation, missingFields, newQrId, sanitizeInputs,
+  buildPayload, describeStation, missingFields, newQrId, poolCount, sanitizeInputs,
 } from '../../game/engine.js';
 
 // The QR's timestamp refreshes so a screenshot goes stale; its id does not,
@@ -59,7 +59,7 @@ function LimitStatus({ limitKey }) {
   return (
     <Alert severity={left ? 'info' : 'warning'}>
       <strong>{info.label}: {left} of {info.max} left.</strong>
-      {holders.length > 0 && ` Taken by group ${holders.join(', ')}.`}
+      {holders.length > 0 && ` Taken by team ${holders.join(', ')}.`}
       {!left && ' Do not run this - nobody else can receive it.'}
     </Alert>
   );
@@ -67,14 +67,14 @@ function LimitStatus({ limitKey }) {
 
 function PoolStatus({ poolKey }) {
   const [data] = useDocumentData(doc(db, 'pools', poolKey));
-  const n = Number(data?.count) || 0;
+  const n = poolCount(data);
   return <Alert severity={n ? 'info' : 'warning'}>Donation box: <strong>{n}</strong> apple{n === 1 ? '' : 's'}.</Alert>;
 }
 
 function VoteStatus() {
   const [voting] = useDocumentData(doc(db, 'voting', 'finalWill'));
   if (voting?.status === 'done') {
-    return <Alert severity="success">Vote winner: <strong>Group {voting.winner}</strong>. Only they can scan this QR.</Alert>;
+    return <Alert severity="success">Vote winner: <strong>Group {voting.winner}</strong>. Only a team of that group can scan this QR (first scan takes it).</Alert>;
   }
   return <Alert severity="warning">No winner announced yet (Live events → The Final Will vote).</Alert>;
 }

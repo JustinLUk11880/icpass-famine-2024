@@ -22,6 +22,14 @@ export const APPLE_MAX = 8;
 // the helper page (config/game.groupCount, default DEFAULT_GROUP_COUNT).
 export const MAX_GROUPS = 20;
 export const DEFAULT_GROUP_COUNT = 10;
+
+// Each group splits into sub-groups ("teams") that play separate profiles:
+// group 1 plays as teams 1.1 and 1.2. Stations, cooldowns, limits and
+// marriages work per team; the leaderboard adds a group's teams together.
+export const SUBGROUPS = 2;
+
+// The supermarket donation box starts with this many apples after a reset.
+export const INITIAL_DONATION_APPLES = 50;
 export const MINUTE = 60 * 1000;
 
 // ---------------------------------------------------------------- fields ---
@@ -229,7 +237,7 @@ export const STATIONS = [
     stage: 'jobsSecondary',
     label: 'Artist',
     minEducation: EDU.SECONDARY,
-    fields: [number('watchers', 'Other groups watching', 0, MAX_GROUPS - 1, 0)],
+    fields: [number('watchers', 'Other groups watching', 0, MAX_GROUPS * SUBGROUPS - 1, 0)],
     effect: (i) => ({ money: 200 + 200 * i.watchers, food: -2, once: 'artist' }),
     notes: 'Concert of at least 3 mins. $200 plus $200 per watching group (they do not pay). Once per group.',
   }),
@@ -320,8 +328,9 @@ export const STATIONS = [
     label: 'Casino',
     minEducation: EDU.NONE,
     fields: [number('amount', 'Won (+) or lost (-) in $', -5000, 5000, null, { required: true, nonZero: true })],
-    effect: (i) => ({ money: i.amount, penalty: true }),
-    notes: 'RSM 2.28. Poker and 21. Check they can cover the bet before they play.',
+    // Entertainment always raises happiness by 2, win or lose.
+    effect: (i) => ({ money: i.amount, happiness: 2, penalty: true }),
+    notes: 'RSM 2.28. Poker and 21. +2 happiness win or lose. Check they can cover the bet before they play.',
   },
   {
     id: 'ent.raffle',
@@ -329,8 +338,8 @@ export const STATIONS = [
     label: 'Raffle tickets',
     minEducation: EDU.NONE,
     fields: [number('tickets', 'Tickets bought', 1, 100, 1)],
-    effect: (i) => ({ money: -50 * i.tickets, raffle: i.tickets }),
-    notes: '$50 per ticket. Wheel spins at the end (1st and 2nd prize). Other groups never see how many tickets you hold.',
+    effect: (i) => ({ money: -50 * i.tickets, happiness: 2, raffle: i.tickets }),
+    notes: '$50 per ticket, +2 happiness. Wheel spins at the end (1st and 2nd prize). Other groups never see how many tickets you hold.',
   },
   {
     id: 'ent.sauna',
@@ -362,8 +371,8 @@ export const STATIONS = [
     minEducation: EDU.NONE,
     fields: [number('apples', 'Apples donated', 1, APPLE_MAX, 1)],
     poolKey: 'apples',
-    effect: (i) => ({ food: -i.apples, pool: { key: 'apples', delta: i.apples } }),
-    notes: 'Apples go into the shared donation box for any group to receive.',
+    effect: (i) => ({ food: -i.apples, happiness: 2, pool: { key: 'apples', delta: i.apples } }),
+    notes: 'Donating makes the team happier: +2 happiness. Apples go into the shared donation box.',
   },
   {
     id: 'shop.receive',
@@ -375,9 +384,9 @@ export const STATIONS = [
     effect: (i) => ({
       food: i.apples,
       pool: { key: 'apples', delta: -i.apples },
-      checks: [{ type: 'appleRoom', count: i.apples }],
+      checks: [{ type: 'moneyBelow', value: 200 }, { type: 'appleRoom', count: i.apples }],
     }),
-    notes: 'Only while the donation box has apples in it.',
+    notes: `Only for teams with under $200, while the donation box has apples (it starts with ${INITIAL_DONATION_APPLES}).`,
   },
 
   // Community: games, so the 15-minute cooldown applies to the challenge.
@@ -419,8 +428,8 @@ export const STATIONS = [
     label: 'Wedding',
     minEducation: EDU.NONE,
     fields: [],
-    effect: () => ({ marriage: 'wedding', checks: [{ type: 'notMarried' }] }),
-    notes: 'BOTH groups scan this same QR to marry each other. Free. They then save money together with "Bank: deposit".',
+    effect: () => ({ happiness: 5, marriage: 'wedding', checks: [{ type: 'notMarried' }] }),
+    notes: 'BOTH teams scan this same QR to marry each other: free, and +5 happiness each. Teams of the same group cannot marry. They then save money together with "Bank: deposit".',
   },
   {
     id: 'wed.deposit',

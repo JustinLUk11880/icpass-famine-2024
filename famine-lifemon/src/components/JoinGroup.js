@@ -7,7 +7,8 @@ import { doc } from 'firebase/firestore';
 import { useDocumentData } from 'react-firebase-hooks/firestore';
 
 import { db } from '../database/firebase';
-import { isValidGroupId } from '../game/engine.js';
+import { SUBGROUPS } from '../game/catalog.js';
+import { isValidTeamId, teamIdFor } from '../game/engine.js';
 import { clampGroupCount, joinGroup } from '../game/firestore.js';
 
 const theme = createTheme({ typography: { fontFamily: 'Ubuntu' } });
@@ -18,15 +19,17 @@ export default function JoinGroup({ setGroup }) {
   const count = clampGroupCount(config?.groupCount);
   const GROUPS = Array.from({ length: count }, (_, i) => i + 1);
   const [choice, setChoice] = useState('');
+  const [sub, setSub] = useState('');
+  const SUBS = Array.from({ length: SUBGROUPS }, (_, i) => i + 1);
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState(null);
 
   async function handleSubmit(e) {
     e.preventDefault();
     if (joining) return;
-    const id = String(choice);
-    if (!isValidGroupId(id)) {
-      setError('Please choose a group.');
+    const id = choice && sub ? teamIdFor(choice, sub) : '';
+    if (!isValidTeamId(id)) {
+      setError('Please choose your group and your team.');
       return;
     }
     setJoining(true);
@@ -53,8 +56,9 @@ export default function JoinGroup({ setGroup }) {
           <Grid container spacing={2} direction="column" justifyContent="center" alignItems="center">
             <Grid item xs={8}>
               <Typography variant="body2" sx={{ maxWidth: '20em', textAlign: 'center' }}>
-                Choose your group. Everyone in the group shares one passport, so
-                every scan counts for the whole group.
+                Choose your group, then your team. Each group plays as {SUBGROUPS} teams
+                with their own passports; on the leaderboard the teams add up to
+                one group score.
               </Typography>
             </Grid>
             <Grid item xs={8}>
@@ -71,6 +75,24 @@ export default function JoinGroup({ setGroup }) {
               >
                 {GROUPS.map((i) => (
                   <MenuItem key={i} value={i}>Group {i}</MenuItem>
+                ))}
+              </TextField>
+            </Grid>
+            <Grid item xs={8}>
+              <TextField
+                required
+                id="team-select"
+                value={sub}
+                label="Team"
+                onChange={(e) => setSub(e.target.value)}
+                sx={{ width: '20em', maxWidth: '100%' }}
+                select
+                fullWidth
+                margin="dense"
+                disabled={!choice}
+              >
+                {SUBS.map((s) => (
+                  <MenuItem key={s} value={s}>{choice ? `Team ${teamIdFor(choice, s)}` : `Team ${s}`}</MenuItem>
                 ))}
               </TextField>
             </Grid>

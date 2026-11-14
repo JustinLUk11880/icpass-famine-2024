@@ -20,11 +20,14 @@ import {
   performMarriagePayout, performScan, resetGame, setGroupCount,
 } from '../src/game/firestore.js';
 
-const groupRef = (g) => doc(db, 'groups', String(g));
+// Tests name teams by number: 7 means team 7.1. Pass a string ('7.2') for
+// a second team.
+const team = (g) => (typeof g === 'number' ? `${g}.1` : String(g));
+const groupRef = (g) => doc(db, 'groups', team(g));
 const read = async (g) => (await getDoc(groupRef(g))).data();
-const put = (g, over = {}) => setDoc(groupRef(g), { ...randomProfile(g), money: 1000, food: 5, happiness: 10, education: EDU.PHD, ...over });
+const put = (g, over = {}) => setDoc(groupRef(g), { ...randomProfile(team(g)), money: 1000, food: 5, happiness: 10, education: EDU.PHD, ...over });
 const qr = (stationId, inputs = {}, q = newQrId()) => buildPayload(stationId, inputs, q, Date.now());
-const scan = (g, payload) => performScan(db, g, payload);
+const scan = (g, payload) => performScan(db, team(g), payload);
 const count = (results, pred) => results.filter(pred).length;
 const ok = (r) => r.ok === true;
 const reason = (x) => (r) => r.reason === x;
@@ -43,7 +46,7 @@ after(async () => {
 });
 
 test('join: 8 phones joining one group at once create exactly one account', async () => {
-  const results = await Promise.all(Array.from({ length: 8 }, () => joinGroup(db, 1)));
+  const results = await Promise.all(Array.from({ length: 8 }, () => joinGroup(db, team(1))));
   assert.equal(count(results, (r) => r.created), 1);
   assert.ok(results.every(ok));
   const g = await read(1);
@@ -116,16 +119,16 @@ test('wedding: 3 groups scan one wedding QR at once, 2 marry; divorce frees both
   assert.equal(married[0].marriageId, married[1].marriageId);
   const m = (await getDoc(doc(db, 'marriages', married[0].marriageId))).data();
   assert.equal(m.participants.length, 2);
-  for (const x of married) assert.deepEqual([x.money, x.food, x.happiness], [1000, 5, 5], 'the wedding is free');
+  for (const x of married) assert.deepEqual([x.money, x.food, x.happiness], [1000, 5, 10], 'the wedding is free, +5 happiness');
 
   const d = await scan(married[0].g, qr('wed.divorce'));
   assert.equal(d.ok, true, d.reason);
   const [a, b] = await Promise.all(married.map((x) => read(x.g)));
   assert.equal(a.married, false);
-  assert.deepEqual([a.money, a.food, a.happiness], [1000, 0, 2], 'divorcer: empty pot, -10 apples, -3 happiness');
+  assert.deepEqual([a.money, a.food, a.happiness], [1000, 0, 7], 'divorcer: empty pot, -10 apples, -3 happiness');
   assert.equal(b.married, false, 'the partner is freed too');
   assert.equal(b.marriageId, null);
-  assert.deepEqual([b.food, b.happiness], [8, 8], 'divorced: +10 apples (capped), +3 happiness');
+  assert.deepEqual([b.food, b.happiness], [8, 13], 'divorced: +10 apples (capped), +3 happiness');
   assert.equal((await getDoc(doc(db, 'marriages', married[0].marriageId))).data().hasDivorced, true);
   // and can marry again
   const again = await scan(married[1].g, qr('wed.wedding'));
@@ -148,25 +151,35 @@ test('once-only and cooldown hold across separate QR codes', async () => {
   assert.equal(b2.detail.label, 'Banker');
   assert.equal((await scan(9, qr('jobs.lawyer', { result: 'win' }))).ok, true, 'another station is free');
   // a helper can clear it
-  assert.equal((await performAdjust(db, 9, { clearCooldowns: true }, 'replay')).ok, true);
+  assert.equal((await performAdjust(db, team(9), { clearCooldowns: true }, 'replay')).ok, true);
   assert.equal((await scan(9, qr('jobs.banker', { result: 'win' }))).ok, true);
 });
 
 test('donation box: 6 donations and 9 simultaneous claims, exactly 6 claims succeed', async () => {
   await resetGame(db);
   const donors = [1, 2, 3, 4, 5, 6];
+  await setDoc(doc(db, 'pools', 'apples'), { count: 0 });
   await Promise.all(donors.map((g) => put(g, { food: 3 })));
   const given = await Promise.all(donors.map((g) => scan(g, qr('shop.donate', { apples: 1 }))));
   assert.ok(given.every(ok), JSON.stringify(given.map((r) => r.reason)));
   assert.equal((await getDoc(doc(db, 'pools', 'apples'))).data().count, 6);
   const takers = [7, 8, 9, 10, 11, 12, 13, 14, 15];
-  await Promise.all(takers.map((g) => put(g, { food: 0 })));
+  await Promise.all(takers.map((g) => put(g, { food: 0, money: 100 })));
   const claims = await Promise.all(takers.map((g) => scan(g, qr('shop.receive', { apples: 1 }))));
   assert.equal(count(claims, ok), 6, JSON.stringify(claims.map((r) => r.reason)));
   assert.equal(count(claims, reason('pool_empty')), 3);
   assert.equal((await getDoc(doc(db, 'pools', 'apples'))).data().count, 0);
   const apples = (await Promise.all(takers.map(read))).reduce((s, g) => s + g.food, 0);
   assert.equal(apples, 6, 'no apple created or lost');
+  for (const g of donors) assert.equal((await read(g)).happiness, 12, 'donors +2 happiness');
+  // under $200 only
+  await put(17, { food: 0, money: 200 });
+  assert.equal((await scan(17, qr('shop.receive', { apples: 1 }))).reason, 'too_rich');
+  // after a reset the box holds 50
+  await deleteDoc(doc(db, 'pools', 'apples'));
+  await put(18, { food: 0, money: 0 });
+  assert.equal((await scan(18, qr('shop.receive', { apples: 3 }))).ok, true);
+  assert.equal((await getDoc(doc(db, 'pools', 'apples'))).data().count, 47);
   // buying is refused when it would overflow the 8-apple cap
   await put(16, { food: 7, money: 1000 });
   assert.equal((await scan(16, qr('shop.buyApples', { price: 80, apples: 2 }))).reason, 'apples_full');
@@ -191,7 +204,7 @@ test('marriage bank: deposits, 8 phones on one deposit QR, payout pressed twice'
   const mid = (await read(1)).marriageId;
   const m = (await getDoc(doc(db, 'marriages', mid))).data();
   assert.equal(m.pot, 800);
-  assert.deepEqual(m.deposits, { 1: 300, 2: 500 });
+  assert.deepEqual(m.deposits, { '1.1': 300, '2.1': 500 });
 
   const [p1, p2] = await Promise.all([performMarriagePayout(db), performMarriagePayout(db)]);
   const paid = [...p1, ...p2].filter((r) => r.status === 'applied');
@@ -235,6 +248,31 @@ test('final will vote: rules enforce one valid vote per group; only the winner s
   await closeVoting(db);
 });
 
+test('teams: both teams of a group join at once, play separately, cannot marry each other', async () => {
+  await resetGame(db);
+  const joins = await Promise.all(['5.1', '5.2', '5.1', '5.2', '5.1', '5.2', '5.1', '5.2'].map((t) => joinGroup(db, t)));
+  assert.equal(count(joins, (r) => r.created), 2, 'exactly one account per team');
+  const [a, b] = await Promise.all([read('5.1'), read('5.2')]);
+  assert.equal(a.team, '5.1');
+  assert.equal(b.team, '5.2');
+  assert.equal(a.group, 5);
+  assert.equal(b.group, 5);
+  // a scan by one team leaves the other alone
+  await put('5.1', { money: 500 });
+  await put('5.2', { money: 500 });
+  assert.equal((await scan('5.1', qr('ent.sauna'))).ok, true);
+  assert.deepEqual([(await read('5.1')).money, (await read('5.2')).money], [400, 500]);
+  // sister teams cannot marry; other groups' teams can
+  const w = qr('wed.wedding');
+  assert.equal((await scan('5.1', w)).ok, true);
+  assert.equal((await scan('5.2', w)).reason, 'same_group');
+  await put('6.2', { married: false });
+  assert.equal((await scan('6.2', w)).ok, true);
+  assert.equal((await read('5.2')).married, false);
+  assert.equal((await joinGroup(db, '5.3')).reason, 'missing_group');
+  assert.equal((await joinGroup(db, '5')).reason, 'missing_group');
+});
+
 test('group count setting: clamped and validated', async () => {
   await setGroupCount(db, 25);
   assert.equal((await getDoc(doc(db, 'config', 'game'))).data().groupCount, 20);
@@ -252,7 +290,7 @@ test('the last apple: 10 simultaneous apple-costing scans, 2 apples, exactly 2 s
   assert.equal(count(results, ok), 2, JSON.stringify(results.map((r) => r.reason)));
   assert.equal(count(results, reason('hungry')), 8);
   assert.equal((await read(5)).food, 0);
-  assert.equal((await getDoc(doc(db, 'pools', 'apples'))).data().count, 2);
+  assert.equal((await getDoc(doc(db, 'pools', 'apples'))).data().count, 52, 'the box starts at 50');
 });
 
 test('apples never exceed 8, even with simultaneous apple gains', async () => {
@@ -286,11 +324,11 @@ test('global events: pandemic pressed twice at once still hits each group once',
 
 test('manual adjustment applies once and is logged', async () => {
   await put(7, { money: 100, food: 7, happiness: 1 });
-  const r = await performAdjust(db, 7, { money: 500, food: 5, happiness: -9, education: 2 }, 'raffle 1st prize');
+  const r = await performAdjust(db, team(7), { money: 500, food: 5, happiness: -9, education: 2 }, 'raffle 1st prize');
   assert.equal(r.ok, true);
   const g = await read(7);
   assert.deepEqual([g.money, g.food, g.happiness, g.education], [600, 8, 0, 2]);
-  const log = (await getDocs(collection(db, 'redemptions'))).docs.map((d) => d.data()).filter((d) => d.kind === 'adjust' && d.groupId === '7');
+  const log = (await getDocs(collection(db, 'redemptions'))).docs.map((d) => d.data()).filter((d) => d.kind === 'adjust' && d.groupId === team(7));
   assert.equal(log.length, 1);
   assert.equal(log[0].note, 'raffle 1st prize');
 });
@@ -310,8 +348,10 @@ test('rules: the server refuses impossible states whatever the client sends', as
   assert.ok(await denied(updateDoc(groupRef(8), { happiness: -1 })), 'negative happiness');
   assert.ok(await denied(updateDoc(groupRef(8), { education: 5 })), 'degree above PhD');
   assert.ok(await denied(updateDoc(groupRef(8), { money: 'lots' })), 'non-numeric money');
-  assert.ok(await denied(setDoc(doc(db, 'groups', '21'), randomProfile(21))), 'group 21');
-  assert.ok(await denied(setDoc(doc(db, 'groups', '03'), randomProfile(3))), 'group "03"');
+  assert.ok(await denied(setDoc(doc(db, 'groups', '21.1'), randomProfile('21.1'))), 'team 21.1');
+  assert.ok(await denied(setDoc(doc(db, 'groups', '3.3'), randomProfile('3.3'))), 'team 3.3');
+  assert.ok(await denied(setDoc(doc(db, 'groups', '03.1'), randomProfile('3.1'))), 'team "03.1"');
+  assert.ok(await denied(setDoc(doc(db, 'groups', '3'), randomProfile('3.1'))), 'old whole-group id "3"');
   assert.ok(await denied(setDoc(doc(db, 'marriages', 'x'), { participants: ['1', '2', '3'], hasDivorced: false })), 'three-way marriage');
   assert.ok(await denied(updateDoc(doc(db, 'redemptions', 'nope'), { groupId: '1' })), 'editing a redemption');
   const g = await read(8);
@@ -325,11 +365,11 @@ test('every station resolves end-to-end against the live database', async () => 
     const id = ((g - 1) % 20) + 1;
     g += 1;
     const over = { education: station.minEducation, money: 3000, food: 4, happiness: 20, gymMember: station.id !== 'com.gymMembership', married: false, marriageId: null };
-    if (station.id === 'secret.robbery') over.money = 100;
+    if (station.id === 'secret.robbery' || station.id === 'shop.receive') over.money = 100;
     if (station.id === 'wed.divorce' || station.id === 'wed.deposit') Object.assign(over, { married: true, marriageId: 'm_live' });
     await put(id, over);
-    if (station.id === 'wed.divorce') await setDoc(doc(db, 'marriages', 'm_live'), { participants: [String(id)], hasDivorced: false });
-    if (station.id === 'wed.deposit') await setDoc(doc(db, 'marriages', 'm_live'), { participants: [String(id), '20'], hasDivorced: false, pot: 0 });
+    if (station.id === 'wed.divorce') await setDoc(doc(db, 'marriages', 'm_live'), { participants: [team(id)], hasDivorced: false });
+    if (station.id === 'wed.deposit') await setDoc(doc(db, 'marriages', 'm_live'), { participants: [team(id), team(id === 20 ? 19 : 20)], hasDivorced: false, pot: 0 });
     if (station.id === 'shop.receive') await setDoc(doc(db, 'pools', 'apples'), { count: 5 });
     const inputs = {};
     for (const f of station.fields) {
@@ -384,7 +424,7 @@ test('load: 80 participants (10 groups x 8) scanning bursts, totals exact', asyn
     const visits = (100 * MEMBERS * ROUNDS - s.money) / 100;
     assert.ok(Number.isInteger(visits) && visits >= 0 && visits <= MEMBERS * ROUNDS, `group ${g}: money ${s.money}`);
     assert.equal(s.happiness, 50 + 2 * visits, `group ${g}: happiness out of step with money`);
-    const logged = (await getDocs(collection(db, 'redemptions'))).docs.filter((d) => d.data().groupId === String(g) && d.data().stationId === 'ent.sauna').length;
+    const logged = (await getDocs(collection(db, 'redemptions'))).docs.filter((d) => d.data().groupId === team(g) && d.data().stationId === 'ent.sauna').length;
     assert.equal(logged, visits, `group ${g}: ${logged} logged vs ${visits} applied`);
   }
 });

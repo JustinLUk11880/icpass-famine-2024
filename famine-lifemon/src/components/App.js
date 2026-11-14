@@ -6,7 +6,7 @@ import { useAuthState } from 'react-firebase-hooks/auth';
 
 import { helperPath } from './secret/Secret';
 import { auth } from '../database/firebase';
-import { isValidGroupId } from '../game/engine.js';
+import { isValidTeamId } from '../game/engine.js';
 import Passport from './Passport';
 import Layout from './Layout';
 import JoinGroup from './JoinGroup';
@@ -19,14 +19,15 @@ function useStoredGroup() {
   const [group, setGroupState] = useState(() => {
     try {
       const raw = window.localStorage.getItem('group');
-      return isValidGroupId(raw) ? raw : null;
+      // A pre-sub-group value such as "3" is no longer a team: rejoin.
+      return isValidTeamId(raw) ? raw : null;
     } catch (e) {
       return null;
     }
   });
 
   const setGroup = useCallback((value) => {
-    const next = value != null && isValidGroupId(String(value)) ? String(value) : null;
+    const next = value != null && isValidTeamId(String(value)) ? String(value) : null;
     setGroupState(next);
     try {
       if (next) window.localStorage.setItem('group', next);

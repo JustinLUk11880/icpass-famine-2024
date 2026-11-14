@@ -8,7 +8,9 @@ import { useCollection, useDocumentData } from 'react-firebase-hooks/firestore';
 
 import { db } from '../../database/firebase';
 import { EDUCATION_LABELS, LIMITS, MAX_GROUPS, getStation } from '../../game/catalog.js';
-import { GLOBAL_EVENTS, isValidGroupId, potOf, reasonMessage, summaryText } from '../../game/engine.js';
+import {
+  GLOBAL_EVENTS, isValidTeamId, parentOf, poolCount, potOf, reasonMessage, summaryText,
+} from '../../game/engine.js';
 import {
   clampGroupCount, createGroups, performAdjust, resetGame, setGroupCount,
 } from '../../game/firestore.js';
@@ -31,7 +33,7 @@ function optionText(station, inputs) {
 }
 
 function activityLine(r) {
-  const who = `Group ${r.groupId}`;
+  const who = `Team ${r.groupId}`;
   const what = summaryText(r.summary || {});
   if (r.kind === 'event') return `${who} · ${GLOBAL_EVENTS[r.eventId]?.label || r.eventId} · ${what}`;
   if (r.kind === 'payout') return `${who} · Marriage payout (pot $${r.pot}) · ${what}`;
@@ -83,8 +85,8 @@ function Adjust({ groupIds }) {
         Adds or removes from a group directly. Nothing goes below 0 and apples stay within 8.
       </Typography>
       <Stack spacing={1.5}>
-        <TextField select size="small" label="Group" value={gid} onChange={(e) => setGid(e.target.value)}>
-          {groupIds.map((g) => <MenuItem key={g} value={g}>Group {g}</MenuItem>)}
+        <TextField select size="small" label="Team" value={gid} onChange={(e) => setGid(e.target.value)}>
+          {groupIds.map((g) => <MenuItem key={g} value={g}>Team {g}</MenuItem>)}
         </TextField>
         <Stack direction="row" spacing={1}>
           <TextField size="small" type="number" label="± $" value={d.money} onChange={set('money')} />
@@ -141,14 +143,14 @@ function Raffle({ groups }) {
       ) : (
         <>
           <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 0.75, mb: 1.5 }}>
-            {entries.sort((a, b) => a.id - b.id).map((g) => (
-              <Chip key={g.id} label={`Group ${g.id}: ${g.raffleTickets} (${Math.round((100 * g.raffleTickets) / total)}%)`} />
+            {entries.map((g) => (
+              <Chip key={g.id} label={`Team ${g.id}: ${g.raffleTickets} (${Math.round((100 * g.raffleTickets) / total)}%)`} />
             ))}
           </Stack>
           <Button variant="outlined" onClick={draw}>Draw 1st and 2nd prize</Button>
           {winners && (
             <Alert severity="success" sx={{ mt: 1.5 }}>
-              🥇 Group {winners.first}{winners.second ? `  ·  🥈 Group ${winners.second}` : ''}. Award prizes with "Fix a mistake / award a prize".
+              🥇 Team {winners.first}{winners.second ? `  ·  🥈 Team ${winners.second}` : ''}. Award prizes with "Fix a mistake / award a prize".
             </Alert>
           )}
         </>
@@ -179,7 +181,7 @@ function Reset() {
     <Paper variant="outlined" sx={{ p: 2, borderColor: 'error.light' }}>
       <Typography fontWeight={800} color="error" sx={{ mb: 0.5 }}>Reset the whole game</Typography>
       <Typography fontSize={13} color="text.secondary" sx={{ mb: 1.5 }}>
-        Deletes every group, scan, marriage, vote, limit, donated apple and announcement. Keeps the number of groups. Use before the event starts.
+        Deletes every team, scan, marriage, vote, limit and announcement, and refills the donation box to 50 apples. Keeps the number of groups. Use before the event starts.
       </Typography>
       <Button color="error" variant="outlined" onClick={() => setOpen(true)}>Reset game...</Button>
       {done && <Alert severity="info" sx={{ mt: 1.5 }}>{done}</Alert>}
@@ -213,7 +215,7 @@ function GroupCount() {
     <Paper variant="outlined" sx={{ p: 2 }}>
       <Typography fontWeight={800} sx={{ mb: 0.5 }}>Number of groups: {current}</Typography>
       <Typography fontSize={13} color="text.secondary" sx={{ mb: 1.5 }}>
-        How many groups appear in the join list and the vote (1 to {MAX_GROUPS}).
+        How many groups appear in the join list and the vote (1 to {MAX_GROUPS}). Each group plays as 2 teams.
       </Typography>
       <Stack direction="row" spacing={1}>
         <TextField size="small" type="number" label="Change to" value={value} onChange={(e) => setValue(e.target.value)} inputProps={{ min: 1, max: MAX_GROUPS }} sx={{ width: 160 }} />
@@ -233,7 +235,7 @@ function CreateGroups() {
     setBusy(true);
     try {
       const n = await createGroups(db, Number(effective));
-      setMsg(`${n} new group${n === 1 ? '' : 's'} created with random starting profiles. Existing groups were left alone.`);
+      setMsg(`${n} new team${n === 1 ? '' : 's'} created with random starting profiles. Existing teams were left alone.`);
     } catch (e) {
       setMsg(`Failed: ${e?.message || e}`);
     } finally {
@@ -244,8 +246,8 @@ function CreateGroups() {
     <Paper variant="outlined" sx={{ p: 2 }}>
       <Typography fontWeight={800} sx={{ mb: 0.5 }}>Create groups in advance</Typography>
       <Typography fontSize={13} color="text.secondary" sx={{ mb: 1.5 }}>
-        Optional. Rolls each group's random profile now so you can see it before anyone joins.
-        Otherwise a group is created when its first member joins.
+        Optional. Rolls a random profile for both teams of each group now, so you can see them
+        before anyone joins. Otherwise a team is created when its first member joins.
       </Typography>
       <Stack direction="row" spacing={1}>
         <TextField size="small" type="number" label="How many groups" value={effective} onChange={(e) => setCount(e.target.value)} inputProps={{ min: 1, max: MAX_GROUPS }} sx={{ width: 160 }} />
@@ -266,20 +268,20 @@ export default function GroupsPanel() {
   const now = Date.now();
 
   const groups = (groupsSnap?.docs || [])
-    .filter((d) => isValidGroupId(d.id))
-    .map((d) => ({ id: Number(d.id), ...d.data(), raffleTickets: Number(d.data().raffleTickets) || 0 }))
-    .sort((a, b) => a.id - b.id);
+    .filter((d) => isValidTeamId(d.id))
+    .map((d) => ({ id: d.id, ...d.data(), raffleTickets: Number(d.data().raffleTickets) || 0 }))
+    .sort((a, b) => parentOf(a.id) - parentOf(b.id) || a.id.localeCompare(b.id));
   const limits = Object.fromEntries((limitsSnap?.docs || []).map((d) => [d.id, d.data().holders || []]));
 
   return (
     <Stack spacing={3}>
       <Box>
-        <H>Groups ({groups.length})</H>
+        <H>Teams ({groups.length})</H>
         <TableContainer component={Paper} variant="outlined">
           <Table size="small">
             <TableHead>
               <TableRow>
-                <TableCell>Group</TableCell>
+                <TableCell>Team</TableCell>
                 <TableCell align="right">$</TableCell>
                 <TableCell align="right">🍎</TableCell>
                 <TableCell align="right">😄</TableCell>
@@ -289,7 +291,7 @@ export default function GroupsPanel() {
             </TableHead>
             <TableBody>
               {groups.length === 0 && (
-                <TableRow><TableCell colSpan={6}>No groups yet.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={6}>No teams yet.</TableCell></TableRow>
               )}
               {groups.map((g) => (
                 <TableRow key={g.id}>
@@ -328,7 +330,7 @@ export default function GroupsPanel() {
 
       <Box>
         <H>Marriages and donation box</H>
-        <Typography fontSize={14} sx={{ mb: 1 }}>🍎 Donation box: <strong>{Number(pool?.count) || 0}</strong> apple(s)</Typography>
+        <Typography fontSize={14} sx={{ mb: 1 }}>🍎 Donation box: <strong>{poolCount(pool)}</strong> apple(s)</Typography>
         {marriages.length === 0 ? (
           <Typography fontSize={14}>No marriages yet.</Typography>
         ) : (
@@ -340,13 +342,13 @@ export default function GroupsPanel() {
                 : m.paidOut ? `paid out (pot was $${m.potAtPayout || 0})`
                   : parts.length < 2 ? 'waiting for the second group to scan'
                     : `pot $${potOf(m).toLocaleString('en-US')}${dep ? ` (${dep})` : ''}`;
-              return <li key={m.id}>Groups {parts.join(' + ') || '?'}: {state}</li>;
+              return <li key={m.id}>Teams {parts.join(' + ') || '?'}: {state}</li>;
             })}
           </Box>
         )}
       </Box>
 
-      <Adjust groupIds={groups.map((g) => String(g.id))} />
+      <Adjust groupIds={groups.map((g) => g.id)} />
       <Raffle groups={groups} />
 
       <Box>

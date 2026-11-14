@@ -128,7 +128,7 @@ function MarriagePayout() {
         <Box component="ul" sx={{ fontFamily: 'Roboto, Helvetica, Arial, sans-serif', fontSize: 14, m: 0, mt: 1, pl: 2.5 }}>
           {active.length === 0 && <li>No active marriages.</li>}
           {active.map((m) => (
-            <li key={m.id}>Groups {m.participants.join(' + ')}: pot ${potOf(m).toLocaleString('en-US')} → each gets ${(potOf(m) * 2).toLocaleString('en-US')}</li>
+            <li key={m.id}>Teams {m.participants.join(' + ')}: pot ${potOf(m).toLocaleString('en-US')} → each gets ${(potOf(m) * 2).toLocaleString('en-US')}</li>
           ))}
         </Box>
         {res && (
@@ -268,14 +268,14 @@ export default function LiveEvents() {
                   <Typography fontSize={14} sx={{ mt: 0.5 }}>{e.description}</Typography>
                   {res && (
                     <Alert severity={failed.length ? 'error' : 'success'} sx={{ mt: 1.5 }}>
-                      Applied to {applied.length} group{applied.length === 1 ? '' : 's'}
+                      Applied to {applied.length} team{applied.length === 1 ? '' : 's'}
                       {skipped.length > 0 && `, ${skipped.length} already had it`}
-                      {failed.length > 0 && `, ${failed.length} FAILED (groups ${failed.map((f) => f.gid).join(', ')}) - press again to retry them`}
+                      {failed.length > 0 && `, ${failed.length} FAILED (teams ${failed.map((f) => f.gid).join(', ')}) - press again to retry them`}
                       .
                       {applied.length > 0 && (
                         <Box component="ul" sx={{ fontFamily: 'Roboto, Helvetica, Arial, sans-serif', fontSize: 14, m: 0, mt: 0.5, pl: 2.5 }}>
                           {applied.sort((a, b) => a.gid - b.gid).map((a) => (
-                            <li key={a.gid}>Group {a.gid}: {formatDelta(a.summary) || 'no change'}</li>
+                            <li key={a.gid}>Team {a.gid}: {formatDelta(a.summary) || 'no change'}</li>
                           ))}
                         </Box>
                       )}

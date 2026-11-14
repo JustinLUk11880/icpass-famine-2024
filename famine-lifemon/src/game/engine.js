@@ -6,7 +6,8 @@
 // to write - it never talks to the network itself.
 
 import {
-  APPLE_MAX, EDU, EDUCATION_LABELS, LIMITS, MAX_GROUPS, MINUTE, cooldownLabel, getStation,
+  APPLE_MAX, EDU, EDUCATION_LABELS, INITIAL_DONATION_APPLES, LIMITS, MAX_GROUPS, MINUTE, SUBGROUPS,
+  cooldownLabel, getStation,
 } from './catalog.js';
 
 export const QR_HEADER = 'lifemon-v2';
@@ -31,6 +32,43 @@ export const isValidGroupId = (g) => {
   // Firestore document id - the leading-space bug the 2024 user ids had.
   return Number.isInteger(n) && n >= 1 && n <= MAX_GROUPS && String(g) === String(n);
 };
+
+// A team is one sub-group of a group: "1.1", "1.2", ... "20.2". Every group
+// document, scan, cooldown and marriage belongs to a team; votes, the join
+// list and the leaderboard work in whole groups.
+export const isValidTeamId = (t) => {
+  if (typeof t !== 'string') return false;
+  const m = /^(\d{1,2})\.(\d)$/.exec(t);
+  if (!m || !isValidGroupId(m[1])) return false;
+  const sub = Number(m[2]);
+  return sub >= 1 && sub <= SUBGROUPS;
+};
+export const teamIdFor = (group, sub) => `${Number(group)}.${Number(sub)}`;
+export const parentOf = (teamId) => Number(String(teamId).split('.')[0]);
+export const teamsOf = (group) => Array.from({ length: SUBGROUPS }, (_, i) => teamIdFor(group, i + 1));
+
+// Leaderboard: a group's score is the sum of its teams. `teams` is a list of
+// { id: teamId, data: groupDocument }; anything that is not a team is ignored.
+export function groupTotals(teams = []) {
+  const stat = (d, k) => Math.max(0, Math.floor(num(d?.[k])));
+  const byGroup = new Map();
+  for (const t of teams) {
+    if (!t || !isValidTeamId(t.id)) continue;
+    const id = parentOf(t.id);
+    const cur = byGroup.get(id) || { id, money: 0, happiness: 0, food: 0, teams: 0 };
+    cur.money += stat(t.data, 'money');
+    cur.happiness += stat(t.data, 'happiness');
+    cur.food += stat(t.data, 'food');
+    cur.teams += 1;
+    byGroup.set(id, cur);
+  }
+  return [...byGroup.values()].sort((a, b) => a.id - b.id);
+}
+
+// The donation box counts as full (INITIAL_DONATION_APPLES) until first used.
+export const poolCount = (pool) => (pool && pool.count !== undefined
+  ? Math.max(0, Math.trunc(num(pool.count)))
+  : INITIAL_DONATION_APPLES);
 
 export const marriageIdFor = (qrId) => `m_${qrId}`;
 export const redemptionIdFor = (qrId, groupId) => `${qrId}_${groupId}`;
@@ -186,7 +224,7 @@ export function resolveScan({
     if (c.type === 'married' && !(group.married && group.marriageId)) return fail('not_married');
     // Only enforced once the in-app vote has announced a winner, so the QR
     // still works if the vote is run on paper instead.
-    if (c.type === 'voteWinner' && voting?.winner != null && String(voting.winner) !== gid) {
+    if (c.type === 'voteWinner' && voting?.winner != null && Number(voting.winner) !== parentOf(gid)) {
       return fail('not_vote_winner', { winner: voting.winner });
     }
     if (c.type === 'appleRoom') {
@@ -222,7 +260,7 @@ export function resolveScan({
   // Shared donation box (supermarket).
   let poolUpdate = null;
   if (e.pool) {
-    const have = Math.max(0, Math.trunc(num(pool?.count)));
+    const have = poolCount(pool);
     if (e.pool.delta < 0 && have < -e.pool.delta) return fail('pool_empty', { count: have });
     poolUpdate = { count: have + e.pool.delta };
   }
@@ -283,6 +321,8 @@ export function resolveScan({
     const parts = marriageParts(marriage);
     if (marriage?.hasDivorced || marriage?.paidOut) return fail('marriage_over');
     if (!parts.includes(gid) && parts.length >= 2) return fail('marriage_full');
+    // Sister teams of one group cannot marry each other.
+    if (parts.some((p) => p !== gid && parentOf(p) === parentOf(gid))) return fail('same_group');
     marriageWrite = {
       participants: parts.includes(gid) ? parts : [...parts, gid],
       hasDivorced: false,
@@ -493,11 +533,12 @@ export function resolveAdjustment(group, {
 
 // "All groups are assigned with different profiles": apples 0-3, happiness 5,
 // money $100-$300, degree none 50% / primary 30% / secondary 20%.
-export function randomProfile(groupNumber, rng = Math.random) {
+export function randomProfile(teamId, rng = Math.random) {
   const r = () => Math.min(Math.max(num(rng()), 0), 0.999999);
   const degree = r();
   return {
-    group: Number(groupNumber),
+    group: parentOf(teamId),
+    team: String(teamId),
     money: 100 + 50 * Math.floor(r() * 5),
     food: Math.floor(r() * 4),
     happiness: 5,
@@ -566,7 +607,8 @@ export function reasonMessage(reason, detail = {}) {
     case 'pool_empty': return detail.count
       ? `Only ${detail.count} donated apple${detail.count === 1 ? ' is' : 's are'} left in the box.`
       : 'The donation box is empty.';
-    case 'not_vote_winner': return `The Final Will went to Group ${detail.winner} - only they can scan this.`;
+    case 'not_vote_winner': return `The Final Will went to Group ${detail.winner} - only a team of that group can scan this.`;
+    case 'same_group': return 'Teams from the same group cannot marry each other.';
     case 'marriage_not_ready': return 'Your partner group has not scanned the wedding QR yet.';
     case 'limit_reached': return LIMIT_REACHED[detail.key] || 'No places left for this.';
     case 'hungry': return 'Your group does not have enough apples.';

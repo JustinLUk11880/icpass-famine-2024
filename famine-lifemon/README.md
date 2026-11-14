@@ -1,9 +1,11 @@
 # LifeMon passport
 
-Web app for the Famine24 LifeMon game. Each group shares one passport. Helpers
-at each station make a QR code; any member of the group scans it and the
-group's money, apples, happiness and degree update on every member's phone at
-once.
+Web app for the Famine24 LifeMon game. Each group (about 12-14 people) plays as
+two teams, e.g. group 1 is teams 1.1 and 1.2, and each team shares one
+passport with its own profile. Helpers at each station make a QR code; any
+member of the team scans it and the team's money, apples, happiness and degree
+update on every member's phone at once. The leaderboard adds a group's two
+teams together.
 
 Live site: https://famine-ace23.web.app · helper page: `/helper` · scoreboard: `/result`
 
@@ -34,9 +36,11 @@ In the Firebase console, enable **Authentication → Sign-in method → Anonymou
 10), then press *Reset game*. Optionally *Create groups in advance* to roll
 every group's random starting profile now.
 
-**Joining:** each participant opens the site and picks their group. The first
-member to join rolls the group's starting profile, per the rules: 0–3 apples,
-5 happiness, $100–300 and a degree (none 50% / Primary 30% / Secondary 20%).
+**Joining:** each participant opens the site and picks their group, then their
+team (e.g. 1.1 or 1.2). The first member of a team to join rolls that team's
+starting profile, per the rules: 0–3 apples, 5 happiness, $100–300 and a degree
+(none 50% / Primary 30% / Secondary 20%). Each passport also shows the whole
+group's total.
 
 **At a station:** on `/helper` → Station QR, choose the stage and station,
 then fill in the result. The QR only appears once every choice is made, and
@@ -88,10 +92,17 @@ comment at the top of `catalog.js`).
   work costs 1 apple either way. Engineer: win +$500, 1 apple either way.
 - **Robbery** only for groups under $500; the police who stop it scan
   *Police: stopped the robbery* (+$500).
-- **Supermarket:** buy apples at the helper's current price ($50-$200), refused
-  if the group cannot hold them; donate apples into a shared box; receive from
-  the box while it has apples.
-- **Wedding and bank:** both groups scan the same wedding QR (free). Each group
+- **Teams:** every station rule (cooldowns, once-only, limits, robbery under
+  $500, marriages, Pandemic and Tax) applies per team. Teams of the same group
+  cannot marry each other. The Final Will vote is one vote per group; either
+  team of the winning group can scan the prize QR (the first scan takes it).
+- **Entertainment** (casino, raffle, sauna): +2 happiness each time.
+- **Supermarket (no cooldowns):** buy apples at the helper's current price
+  ($50-$200), refused if the team cannot hold them; donate apples into a
+  shared box (+2 happiness); receive from the box only if the team has under
+  $200. The box starts with 50 apples after every reset.
+- **Wedding and bank:** both teams scan the same wedding QR (free, +5 happiness
+  each). Each team
   then deposits $100-$500 into the shared pot, secretly, every 30 minutes.
   Divorce: the group that scans gets pot x 1.5, -3 happiness, -10 apples; the
   other group gets +3 happiness, +10 apples. At the end, *Pay out marriages*.

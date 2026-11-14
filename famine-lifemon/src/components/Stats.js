@@ -78,7 +78,7 @@ export default function Stats({ snapshot, loading, groupId, marriage }) {
 		<ThemeProvider theme={theme}>
 			<Paper elevation={6} sx={{ background: 'linear-gradient(45deg, #FFE078 10%, #FFC14F 100%)', px: 2, py: 1.5 }}>
 				<Typography sx={{ fontSize: 22, fontWeight: 800, color: '#111A2D', letterSpacing: 0.5, mb: 0.5 }}>
-					GROUP {groupId ?? g.group ?? '?'}
+					TEAM {groupId ?? g.team ?? '?'}
 				</Typography>
 				<Row label="Money">
 					{value(
@@ -108,7 +108,7 @@ export default function Stats({ snapshot, loading, groupId, marriage }) {
 				<Row label={<span style={{ color: '#fff', fontWeight: 300 }}>Marital status</span>}>
 					{value(
 						<Typography sx={{ fontSize: 15, fontWeight: 800, color: '#fff' }}>
-							{g.married ? `💍 MARRIED${partner ? ` TO GROUP ${partner}` : ' (waiting for partner to scan)'}` : 'SINGLE'}
+							{g.married ? `💍 MARRIED${partner ? ` TO TEAM ${partner}` : ' (waiting for partner to scan)'}` : 'SINGLE'}
 						</Typography>,
 					)}
 				</Row>

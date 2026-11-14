@@ -6,13 +6,15 @@ import { doc } from 'firebase/firestore';
 import { useDocumentData } from 'react-firebase-hooks/firestore';
 
 import { db } from '../database/firebase';
+import { parentOf } from '../game/engine.js';
 import { castVote, clampGroupCount } from '../game/firestore.js';
 
 // The Final Will: while the helper has voting open, every group votes for
 // the team that deserves $1000 most (not itself). Anyone in the group can
 // cast or change the group's single vote until voting closes.
+// Votes are per whole group: either team of a group casts the group's vote.
 export default function FinalWillVote({ groupId }) {
-  const gid = String(groupId);
+  const gid = String(parentOf(groupId));
   const [voting] = useDocumentData(doc(db, 'voting', 'finalWill'));
   const [myVote] = useDocumentData(doc(db, 'votes', gid));
   const [config] = useDocumentData(doc(db, 'config', 'game'));
@@ -34,7 +36,8 @@ export default function FinalWillVote({ groupId }) {
     const won = String(voting.winner) === gid;
     return box(won ? (
       <Typography fontWeight={700}>
-        🎉 Your group won $1000! Go to <strong>{voting.room || 'the helper'}</strong> and scan the QR there to collect it.
+        🎉 Your group won $1000! Send someone from either team to <strong>{voting.room || 'the helper'}</strong> to scan the QR there.
+        The $1000 goes to the team that scans, and counts for the whole group.
       </Typography>
     ) : (
       <Typography>The Final Will went to Group {voting.winner}.</Typography>
@@ -66,8 +69,8 @@ export default function FinalWillVote({ groupId }) {
   return box(
     <Stack spacing={1.25}>
       <Typography fontSize={14}>
-        Vote for the team you think deserves the $1000 most. You cannot vote for your own team.
-        One vote per group - anyone in your group can change it until voting closes.
+        Vote for the group you think deserves the $1000 most. You cannot vote for your own group.
+        One vote per group - anyone in your group (either team) can change it until voting closes.
       </Typography>
       {current != null && (
         <Typography fontWeight={800}>Your group is voting for Group {current}.</Typography>

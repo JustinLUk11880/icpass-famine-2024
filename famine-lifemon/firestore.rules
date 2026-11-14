@@ -21,6 +21,11 @@ service cloud.firestore {
       return id.matches('^([1-9]|1[0-9]|20)$');
     }
 
+    // Teams (sub-groups) 1.1 to 20.2: every group document is a team.
+    function validTeamId(id) {
+      return id.matches('^([1-9]|1[0-9]|20)[.][12]$');
+    }
+
     function validGroup(d) {
       return d.money is number     && d.money >= 0     && d.money <= 100000000
           && d.food is number      && d.food >= 0      && d.food <= 8
@@ -28,11 +33,11 @@ service cloud.firestore {
           && d.education is number && d.education >= 0 && d.education <= 4;
     }
 
-    // One shared account per group; everyone in the group writes to it.
+    // One shared account per team; everyone in the team writes to it.
     // Deletes are allowed so the helper page can reset the game.
-    match /groups/{groupId} {
+    match /groups/{teamId} {
       allow read: if signedIn();
-      allow create, update: if signedIn() && validGroupId(groupId) && validGroup(request.resource.data);
+      allow create, update: if signedIn() && validTeamId(teamId) && validGroup(request.resource.data);
       allow delete: if signedIn();
     }
 
@@ -51,7 +56,7 @@ service cloud.firestore {
       allow read: if signedIn();
       allow create, update: if signedIn()
                             && request.resource.data.holders is list
-                            && request.resource.data.holders.size() <= 20;
+                            && request.resource.data.holders.size() <= 40;
       allow delete: if signedIn();
     }
 

@@ -14,7 +14,7 @@ import {
 
 import { DEFAULT_GROUP_COUNT, MAX_GROUPS, getStation } from './catalog.js';
 import {
-  eventRedemptionIdFor, isValidGroupId, newQrId, planReads, randomProfile,
+  eventRedemptionIdFor, isValidTeamId, newQrId, planReads, randomProfile, teamsOf,
   redemptionIdFor, resolveAdjustment, resolveGlobalEvent, resolveMarriagePayout, resolveScan,
 } from './engine.js';
 
@@ -50,7 +50,7 @@ export async function performScan(db, groupId, payload) {
   const station = getStation(payload?.s);
   if (!station) return { ok: false, reason: 'incomplete_qr' };
   const gid = String(groupId);
-  if (!isValidGroupId(gid)) return { ok: false, reason: 'missing_group' };
+  if (!isValidTeamId(gid)) return { ok: false, reason: 'missing_group' };
 
   const groupRef = doc(db, 'groups', gid);
   const redemptionRef = doc(db, 'redemptions', redemptionIdFor(payload.q, gid));
@@ -83,7 +83,7 @@ export async function performScan(db, groupId, payload) {
       marriage = s.exists() ? s.data() : null;
       if (plan.readPartners && Array.isArray(marriage?.participants)) {
         for (const p of marriage.participants.map(String)) {
-          if (p === gid || !isValidGroupId(p)) continue;
+          if (p === gid || !isValidTeamId(p)) continue;
           const ps = await tx.get(doc(db, 'groups', p));
           if (ps.exists()) partners[p] = ps.data();
         }
@@ -136,9 +136,9 @@ export async function performScan(db, groupId, payload) {
 // starting profile; everyone after attaches to the same document. The
 // transaction stops two phones joining at the same instant from both
 // creating it, or from re-rolling a profile that is already in play.
-export async function joinGroup(db, groupId, rng = Math.random) {
-  const gid = String(groupId);
-  if (!isValidGroupId(gid)) return { ok: false, reason: 'missing_group' };
+export async function joinGroup(db, teamId, rng = Math.random) {
+  const gid = String(teamId);
+  if (!isValidTeamId(gid)) return { ok: false, reason: 'missing_group' };
   const ref = doc(db, 'groups', gid);
   return withRetry(() => runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
@@ -152,13 +152,15 @@ export async function joinGroup(db, groupId, rng = Math.random) {
 export async function createGroups(db, count, rng = Math.random) {
   const n = Math.min(Math.max(Math.trunc(Number(count) || 0), 0), MAX_GROUPS);
   const results = [];
-  for (let g = 1; g <= n; g++) results.push(await joinGroup(db, g, rng));
+  for (let g = 1; g <= n; g++) {
+    for (const t of teamsOf(g)) results.push(await joinGroup(db, t, rng));
+  }
   return results.filter((r) => r.created).length;
 }
 
 export async function performAdjust(db, groupId, change, note = '') {
   const gid = String(groupId);
-  if (!isValidGroupId(gid)) return { ok: false, reason: 'missing_group' };
+  if (!isValidTeamId(gid)) return { ok: false, reason: 'missing_group' };
   const ref = doc(db, 'groups', gid);
   // Generated once, outside the retry loop, so a retried transaction finds
   // its own earlier commit instead of adjusting the group a second time.
@@ -180,7 +182,7 @@ export async function performAdjust(db, groupId, change, note = '') {
 
 export async function performGlobalEvent(db, eventId) {
   const snap = await getDocs(collection(db, 'groups'));
-  const ids = snap.docs.map((d) => d.id).filter(isValidGroupId);
+  const ids = snap.docs.map((d) => d.id).filter(isValidTeamId);
   return Promise.all(ids.map((gid) => withRetry(() => runTransaction(db, async (tx) => {
     const ref = doc(db, 'groups', gid);
     const logRef = doc(db, 'redemptions', eventRedemptionIdFor(eventId, gid));
@@ -209,7 +211,7 @@ export async function performMarriagePayout(db) {
     const marriage = ms.data();
     if (marriage.paidOut) return { id: m.id, status: 'skipped' };
     if (marriage.hasDivorced) return { id: m.id, status: 'divorced' };
-    const parts = (marriage.participants || []).map(String).filter(isValidGroupId);
+    const parts = (marriage.participants || []).map(String).filter(isValidTeamId);
     const groups = {};
     for (const p of parts) {
       const gs = await tx.get(doc(db, 'groups', p));
@@ -244,7 +246,7 @@ export async function announceWinner(db, winner, room) {
   const w = Number(winner);
   const where = String(room || '').trim();
   await setDoc(votingRef(db), { status: 'done', winner: w, room: where, announcedAt: Date.now() }, { merge: true });
-  await broadcast(db, `🗳 The Final Will goes to Group ${w}! Group ${w}: go to ${where || 'the helper'} to scan the QR for your $1000.`, 'alert');
+  await broadcast(db, `🗳 The Final Will goes to Group ${w}! Group ${w}: send someone to ${where || 'the helper'} to scan the QR for your $1000.`, 'alert');
 }
 
 export const castVote = (db, voter, forGroup) =>

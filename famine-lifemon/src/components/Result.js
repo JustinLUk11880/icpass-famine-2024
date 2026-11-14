@@ -5,8 +5,8 @@ import { collection } from 'firebase/firestore';
 import { useCollection } from 'react-firebase-hooks/firestore';
 
 import { db } from '../database/firebase';
-import { APPLE_MAX } from '../game/catalog.js';
-import { isValidGroupId } from '../game/engine.js';
+import { APPLE_MAX, SUBGROUPS } from '../game/catalog.js';
+import { groupTotals, parentOf } from '../game/engine.js';
 
 const medals = { 1: '🥇', 2: '🥈', 3: '🥉' };
 
@@ -43,18 +43,13 @@ export default function Result({ highlightGroup }) {
   const [awardKey, setAwardKey] = useState('money');
   const award = AWARDS.find((a) => a.key === awardKey) || AWARDS[0];
 
-  // Only groups someone has joined. Raffle tickets are deliberately absent:
+  // A group's score is the sum of its teams (1.1 + 1.2). Only groups with at
+  // least one joined team are listed. Raffle tickets are deliberately absent:
   // groups must not learn how many tickets the others hold.
-  const groups = snap
-    ? snap.docs
-      .filter((d) => isValidGroupId(d.id))
-      .map((d) => {
-        const g = d.data();
-        return { id: Number(d.id), money: statOf(g, 'money'), happiness: statOf(g, 'happiness'), food: statOf(g, 'food') };
-      })
-    : [];
+  const groups = groupTotals((snap?.docs || []).map((d) => ({ id: d.id, data: d.data() })));
 
-  const isMine = (id) => highlightGroup != null && Number(id) === Number(highlightGroup);
+  const myGroup = highlightGroup != null ? parentOf(highlightGroup) : null;
+  const isMine = (id) => myGroup != null && Number(id) === myGroup;
   const { sorted, ranks } = rankBy(groups, award.key);
   const rows = sorted.map((g) => ({ ...g, rank: ranks.get(g.id) }));
   const mine = groups.find((g) => isMine(g.id));
@@ -109,7 +104,7 @@ export default function Result({ highlightGroup }) {
     },
     statColumn('money', '💰 Money', (v) => `$${Number(v).toLocaleString('en-US')}`),
     statColumn('happiness', '😄 Joy', (v) => `😄 × ${v}`),
-    statColumn('food', '🍎 Health', (v) => `${v}/${APPLE_MAX}`),
+    statColumn('food', '🍎 Health', (v) => `${v}/${APPLE_MAX * SUBGROUPS}`),
   ];
 
   return (

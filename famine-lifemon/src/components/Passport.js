@@ -10,6 +10,7 @@ import Stats from './Stats';
 import QRBlock from './QRBlock';
 import Result from './Result';
 import { db } from '../database/firebase';
+import GroupTotal from './GroupTotal';
 
 export default function Passport({ groupId, onGroupMissing }) {
 	// Live subscription: when anyone in the group scans, every phone showing
@@ -38,6 +39,7 @@ export default function Passport({ groupId, onGroupMissing }) {
 			<Announcement />
 			<FinalWillVote groupId={groupId} />
 			<Stats snapshot={snapshot} loading={loading} groupId={groupId} marriage={marriage} />
+			<GroupTotal teamId={groupId} mine={snapshot} />
 			<QRBlock groupId={groupId} />
 
 			<Paper elevation={3}>
