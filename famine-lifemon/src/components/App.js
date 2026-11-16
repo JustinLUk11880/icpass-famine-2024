@@ -6,6 +6,7 @@ import { useAuthState } from 'react-firebase-hooks/auth';
 
 import { helperPath } from './secret/Secret';
 import { auth } from '../database/firebase';
+import { useLiveSync } from '../database/liveSync';
 import { isValidTeamId } from '../game/engine.js';
 import Passport from './Passport';
 import Layout from './Layout';
@@ -43,6 +44,7 @@ function useStoredGroup() {
 
 export default function App() {
   const [group, setGroup] = useStoredGroup();
+  useLiveSync();
   const leaveGroup = useCallback(() => setGroup(null), [setGroup]);
   // Firestore rules require request.auth, so nothing may run until the
   // anonymous sign-in started in database/firebase.js has resolved.

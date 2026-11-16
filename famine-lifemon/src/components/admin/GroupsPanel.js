@@ -12,7 +12,7 @@ import {
   GLOBAL_EVENTS, isValidTeamId, parentOf, poolCount, potOf, reasonMessage, summaryText,
 } from '../../game/engine.js';
 import {
-  clampGroupCount, createGroups, performAdjust, resetGame, setGroupCount,
+  clampGroupCount, createGroups, handMarry, handUnmarry, performAdjust, resetGame, setGroupCount,
 } from '../../game/firestore.js';
 
 const H = ({ children }) => (
@@ -36,6 +36,10 @@ function activityLine(r) {
   const who = `Team ${r.groupId}`;
   const what = summaryText(r.summary || {});
   if (r.kind === 'event') return `${who} · ${GLOBAL_EVENTS[r.eventId]?.label || r.eventId} · ${what}`;
+  if (r.kind === 'hand' && r.action === 'marry') {
+    return `${who} + Team ${r.partner} · Married by hand${r.bonus ? ' (+5 😄 each)' : ''}${r.ended?.length ? ` · ended ${r.ended.length} old marriage(s)` : ''}`;
+  }
+  if (r.kind === 'hand') return `${who} · Marriage ended by hand (freed ${(r.freed || []).join(', ')}; pot $${r.pot || 0} not paid)`;
   if (r.kind === 'payout') return `${who} · Marriage payout (pot $${r.pot}) · ${what}`;
   if (r.kind === 'adjust') return `${who} · Manual${r.note ? `: ${r.note}` : ''} · ${what}`;
   const station = getStation(r.stationId);
@@ -65,7 +69,7 @@ function Adjust({ groupIds }) {
       }, note);
       if (!res.ok) setMsg({ severity: 'error', text: reasonMessage(res.reason) });
       else {
-        setMsg({ severity: 'success', text: `Group ${gid}: ${summaryText(res.summary)}` });
+        setMsg({ severity: 'success', text: `Team ${gid}: ${summaryText(res.summary)}` });
         setD({ money: '', food: '', happiness: '', education: '' });
         setNote('');
         setClearCd(false);
@@ -105,6 +109,85 @@ function Adjust({ groupIds }) {
         <Button variant="contained" disabled={!gid || nothing || busy} onClick={apply}>
           {busy ? 'Applying...' : 'Apply'}
         </Button>
+        {msg && <Alert severity={msg.severity}>{msg.text}</Alert>}
+      </Stack>
+    </Paper>
+  );
+}
+
+function MarriageFix({ groups }) {
+  const ids = groups.map((g) => g.id);
+  const byId = Object.fromEntries(groups.map((g) => [g.id, g]));
+  const [a, setA] = useState('');
+  const [b, setB] = useState('');
+  const [bonus, setBonus] = useState(true);
+  const [solo, setSolo] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const status = (id) => (byId[id]?.married ? 'married' : 'single');
+
+  const run = async (fn, ok) => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await fn();
+      if (!r.ok) setMsg({ severity: 'error', text: reasonMessage(r.reason, r.detail) });
+      else setMsg({ severity: 'success', text: ok(r) });
+    } catch (e) {
+      setMsg({ severity: 'error', text: String(e?.message || e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const warn = [a, b].filter((x) => x && byId[x]?.married);
+  return (
+    <Paper variant="outlined" sx={{ p: 2 }}>
+      <Typography fontWeight={800} sx={{ mb: 0.5 }}>Fix a marriage by hand</Typography>
+      <Typography fontSize={13} color="text.secondary" sx={{ mb: 1.5 }}>
+        For when a wedding went wrong. Marrying two teams here first ends any marriage either team is in
+        (no penalty, the other team is freed). Ending a marriage frees both teams with no divorce money or
+        penalty - its pot is not paid back (refund with "Fix a mistake" if needed).
+      </Typography>
+      <Stack spacing={1.5}>
+        <Stack direction="row" spacing={1}>
+          <TextField select size="small" fullWidth label="Marry team" value={a} onChange={(e) => setA(e.target.value)}>
+            {ids.map((g) => <MenuItem key={g} value={g}>Team {g} ({status(g)})</MenuItem>)}
+          </TextField>
+          <TextField select size="small" fullWidth label="with team" value={b} onChange={(e) => setB(e.target.value)}>
+            {ids.map((g) => <MenuItem key={g} value={g}>Team {g} ({status(g)})</MenuItem>)}
+          </TextField>
+        </Stack>
+        <FormControlLabel
+          control={<Checkbox checked={bonus} onChange={(e) => setBonus(e.target.checked)} />}
+          label="Give the wedding bonus (+5 happiness each)"
+        />
+        {warn.length > 0 && (
+          <Alert severity="warning">
+            {warn.map((x) => `Team ${x}`).join(' and ')} {warn.length === 1 ? 'is' : 'are'} already married - that marriage will end first.
+          </Alert>
+        )}
+        <Button
+          variant="contained"
+          disabled={busy || !a || !b}
+          onClick={() => run(() => handMarry(db, a, b, { bonus }), () => `Team ${a} and Team ${b} are now married.`)}
+        >
+          Marry these teams
+        </Button>
+        <Stack direction="row" spacing={1}>
+          <TextField select size="small" fullWidth label="End the marriage of team" value={solo} onChange={(e) => setSolo(e.target.value)}>
+            {ids.filter((g) => byId[g]?.married).map((g) => <MenuItem key={g} value={g}>Team {g}</MenuItem>)}
+          </TextField>
+          <Button
+            variant="outlined"
+            color="error"
+            disabled={busy || !solo}
+            onClick={() => run(() => handUnmarry(db, solo), (r) => { setSolo(''); return `Marriage ended: ${r.freed.map((x) => `Team ${x}`).join(' and ')} are single again.`; })}
+            sx={{ whiteSpace: 'nowrap' }}
+          >
+            End marriage
+          </Button>
+        </Stack>
         {msg && <Alert severity={msg.severity}>{msg.text}</Alert>}
       </Stack>
     </Paper>
@@ -348,6 +431,7 @@ export default function GroupsPanel() {
         )}
       </Box>
 
+      <MarriageFix groups={groups} />
       <Adjust groupIds={groups.map((g) => g.id)} />
       <Raffle groups={groups} />
 

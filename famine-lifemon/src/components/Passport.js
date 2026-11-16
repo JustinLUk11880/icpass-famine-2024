@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Box, Collapse, Paper, Stack, Typography } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { doc } from 'firebase/firestore';
@@ -12,7 +12,15 @@ import Result from './Result';
 import { db } from '../database/firebase';
 import GroupTotal from './GroupTotal';
 
-export default function Passport({ groupId, onGroupMissing }) {
+// A Firestore listener that errors stops for good, which would freeze the
+// passport on old numbers. Remount it a few seconds after any error.
+export default function Passport(props) {
+	const [attempt, setAttempt] = useState(0);
+	const retry = useCallback(() => setAttempt((n) => n + 1), []);
+	return <PassportView key={attempt} {...props} onListenError={retry} />;
+}
+
+function PassportView({ groupId, onGroupMissing, onListenError }) {
 	// Live subscription: when anyone in the group scans, every phone showing
 	// this passport updates, so the whole group always sees the same score.
 	const [docSnap, loading, error] = useDocument(doc(db, 'groups', String(groupId)));
@@ -24,7 +32,12 @@ export default function Passport({ groupId, onGroupMissing }) {
 	const marriageId = snapshot?.married && snapshot?.marriageId ? String(snapshot.marriageId) : null;
 	const [marriage] = useDocumentData(marriageId ? doc(db, 'marriages', marriageId) : null);
 
-	if (error) console.error('Passport read failed', error);
+	useEffect(() => {
+		if (!error) return undefined;
+		console.warn('Passport listener failed - reconnecting', error);
+		const id = setTimeout(onListenError, 3000);
+		return () => clearTimeout(id);
+	}, [error, onListenError]);
 
 	// The helper page can reset the game, which deletes every group. A phone
 	// still pointing at a deleted group goes back to the join screen.

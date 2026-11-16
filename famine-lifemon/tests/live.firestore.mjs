@@ -16,7 +16,7 @@ import { db, auth } from '../src/database/firebase.js';
 import { APPLE_MAX, EDU, STATIONS } from '../src/game/catalog.js';
 import { buildPayload, newQrId, randomProfile } from '../src/game/engine.js';
 import {
-  announceWinner, castVote, closeVoting, joinGroup, openVoting, performAdjust, performGlobalEvent,
+  announceWinner, castVote, closeVoting, handMarry, handUnmarry, joinGroup, openVoting, performAdjust, performGlobalEvent,
   performMarriagePayout, performScan, resetGame, setGroupCount,
 } from '../src/game/firestore.js';
 
@@ -107,32 +107,106 @@ test('Final Will: 3 groups at once, exactly 1 gets $1000', async () => {
   assert.equal(total, 1000);
 });
 
-test('wedding: 3 groups scan one wedding QR at once, 2 marry; divorce frees both', async () => {
+test('wedding: one scan marries both teams, even with both teams and 8 phones scanning at once', async () => {
   await resetGame(db);
   await Promise.all([1, 2, 3].map((g) => put(g, { money: 1000, food: 5, happiness: 5, married: false })));
-  const payload = qr('wed.wedding');
-  const results = await Promise.all([1, 2, 3].map((g) => scan(g, payload)));
-  assert.equal(count(results, ok), 2);
-  assert.equal(count(results, reason('marriage_full')), 1);
-  const married = (await Promise.all([1, 2, 3].map(async (g) => ({ g, ...(await read(g)) })))).filter((x) => x.married);
-  assert.equal(married.length, 2);
-  assert.equal(married[0].marriageId, married[1].marriageId);
-  const m = (await getDoc(doc(db, 'marriages', married[0].marriageId))).data();
-  assert.equal(m.participants.length, 2);
-  for (const x of married) assert.deepEqual([x.money, x.food, x.happiness], [1000, 5, 10], 'the wedding is free, +5 happiness');
+  // The real-life failure: the helper pressed "New QR" between the two
+  // teams. Now the QR names both teams, so any one scan is enough.
+  const payload = qr('wed.wedding', { teamA: '1.1', teamB: '2.1' });
+  const phones = [1, 2, 1, 2, 1, 2, 1, 2];
+  const results = await Promise.all(phones.map((g) => scan(g, payload)));
+  assert.equal(count(results, ok), 1, JSON.stringify(results.map((r) => r.reason)));
+  assert.ok(results.filter((r) => !r.ok).every((r) => ['already_married', 'already_scanned'].includes(r.reason)),
+    JSON.stringify(results.map((r) => r.reason)));
+  const [a1, b1, c1] = await Promise.all([1, 2, 3].map(read));
+  assert.equal(a1.married, true);
+  assert.equal(b1.married, true, 'the partner is married by the same scan');
+  assert.equal(a1.marriageId, b1.marriageId);
+  assert.equal(c1.married, false);
+  for (const x of [a1, b1]) assert.deepEqual([x.money, x.food, x.happiness], [1000, 5, 10], 'free, +5 happiness each');
+  const m = (await getDoc(doc(db, 'marriages', a1.marriageId))).data();
+  assert.deepEqual(m.participants, ['1.1', '2.1']);
+  // a third team scanning that QR is told it is not theirs
+  assert.equal((await scan(3, payload)).reason, 'not_in_wedding');
+  // both can deposit straight away
+  assert.equal((await scan(2, qr('wed.deposit', { amount: 100 }))).ok, true);
+  assert.equal((await scan(1, qr('wed.deposit', { amount: 200 }))).ok, true);
+  assert.equal((await getDoc(doc(db, 'marriages', a1.marriageId))).data().pot, 300);
 
-  const d = await scan(married[0].g, qr('wed.divorce'));
+  const d = await scan(1, qr('wed.divorce'));
   assert.equal(d.ok, true, d.reason);
-  const [a, b] = await Promise.all(married.map((x) => read(x.g)));
+  const [a, b] = await Promise.all([1, 2].map(read));
   assert.equal(a.married, false);
-  assert.deepEqual([a.money, a.food, a.happiness], [1000, 0, 7], 'divorcer: empty pot, -10 apples, -3 happiness');
+  assert.deepEqual([a.money, a.food, a.happiness], [1250, 0, 7], 'divorcer: +pot x 1.5 ($450), -10 apples, -3 happiness');
   assert.equal(b.married, false, 'the partner is freed too');
   assert.equal(b.marriageId, null);
-  assert.deepEqual([b.food, b.happiness], [8, 13], 'divorced: +10 apples (capped), +3 happiness');
-  assert.equal((await getDoc(doc(db, 'marriages', married[0].marriageId))).data().hasDivorced, true);
-  // and can marry again
-  const again = await scan(married[1].g, qr('wed.wedding'));
+  assert.deepEqual([b.money, b.food, b.happiness], [900, 8, 13], 'divorced: no money, +10 apples (capped), +3 happiness');
+  // and can marry again, with a new QR
+  const again = await scan(2, qr('wed.wedding', { teamA: '2.1', teamB: '3.1' }));
   assert.equal(again.ok, true, again.reason);
+  // a partner who has not joined yet is reported clearly
+  await put(4, { married: false });
+  assert.equal((await scan(4, qr('wed.wedding', { teamA: '4.1', teamB: '9.2' }))).reason, 'missing_partner');
+});
+
+test('marriage by hand: repairs the real-life half-weddings, and pressing twice is safe', async () => {
+  await resetGame(db);
+  await Promise.all([1, 2, 3].map((g) => put(g, { married: false, marriageId: null, happiness: 4 })));
+  // Recreate what happened on the day: each team alone in its own wedding.
+  await setDoc(doc(db, 'marriages', 'm_halfA'), { participants: ['1.1'], hasDivorced: false, pot: 0, deposits: {} });
+  await setDoc(doc(db, 'marriages', 'm_halfB'), { participants: ['2.1'], hasDivorced: false, pot: 0, deposits: {} });
+  await updateDoc(groupRef(1), { married: true, marriageId: 'm_halfA' });
+  await updateDoc(groupRef(2), { married: true, marriageId: 'm_halfB' });
+  assert.equal((await scan(1, qr('wed.deposit', { amount: 100 }))).reason, 'marriage_not_ready', 'the reported symptom');
+
+  // The helper presses "Marry these teams" twice at once.
+  const [r1, r2] = await Promise.all([handMarry(db, '1.1', '2.1', { bonus: true }), handMarry(db, '1.1', '2.1', { bonus: true })]);
+  assert.equal([r1, r2].filter(ok).length, 1, JSON.stringify([r1.reason, r2.reason]));
+  assert.ok([r1, r2].some(reason('already_married_together')));
+  const [a, b] = await Promise.all([read(1), read(2)]);
+  assert.equal(a.married && b.married && a.marriageId === b.marriageId, true);
+  assert.deepEqual([a.happiness, b.happiness], [9, 9], 'bonus applied once');
+  assert.equal((await getDoc(doc(db, 'marriages', 'm_halfA'))).data().hasDivorced, true, 'old half-wedding closed');
+  assert.equal((await getDoc(doc(db, 'marriages', 'm_halfB'))).data().hasDivorced, true);
+  // now they can deposit
+  assert.equal((await scan(1, qr('wed.deposit', { amount: 100 }))).ok, true);
+  assert.equal((await scan(2, qr('wed.deposit', { amount: 200 }))).ok, true);
+  assert.equal((await getDoc(doc(db, 'marriages', a.marriageId))).data().pot, 300);
+
+  // re-matching 1.1 with 3.1 frees 2.1; ending it frees both
+  assert.equal((await handMarry(db, '1.1', '3.1')).ok, true);
+  assert.deepEqual([(await read(1)).married, (await read(2)).married, (await read(3)).married], [true, false, true]);
+  const end = await handUnmarry(db, '3.1');
+  assert.equal(end.ok, true);
+  assert.deepEqual([(await read(1)).married, (await read(3)).married], [false, false]);
+  assert.equal((await handUnmarry(db, '3.1')).reason, 'not_married');
+  assert.equal((await handMarry(db, '1.1', '1.2')).reason, 'same_group');
+  const logs = (await getDocs(collection(db, 'redemptions'))).docs.filter((d) => d.data().kind === 'hand').length;
+  assert.equal(logs, 3, 'every hand fix is in the activity log');
+});
+
+test('supermarket QR codes are reusable; each scan applies once, even 8 phones at once', async () => {
+  await resetGame(db);
+  await put(1, { money: 2000, food: 0 });
+  const buy = qr('shop.buyApples', { price: 100, apples: 1 });
+  for (let i = 0; i < 3; i++) assert.equal((await scan(1, buy)).ok, true, `buy ${i + 1}`);
+  let g = await read(1);
+  assert.deepEqual([g.money, g.food], [1700, 3]);
+  // 8 phones of the team scanning together: 8 purchases, none lost, none doubled
+  const many = await Promise.all(Array.from({ length: 5 }, () => scan(1, buy)));
+  assert.equal(count(many, ok), 5);
+  g = await read(1);
+  assert.deepEqual([g.money, g.food], [1200, 8]);
+  // the 8-apple cap still refuses the next purchase, and charges nothing
+  assert.equal((await scan(1, buy)).reason, 'apples_full');
+  assert.equal((await read(1)).money, 1200);
+  const logged = (await getDocs(collection(db, 'redemptions'))).docs.filter((d) => d.data().stationId === 'shop.buyApples').length;
+  assert.equal(logged, 8, 'every purchase logged separately');
+  // a non-supermarket QR is still once per team
+  await put(2, { money: 500 });
+  const sauna = qr('ent.sauna');
+  assert.equal((await scan(2, sauna)).ok, true);
+  assert.equal((await scan(2, sauna)).reason, 'already_scanned');
 });
 
 test('once-only and cooldown hold across separate QR codes', async () => {
@@ -191,10 +265,8 @@ test('donation box: 6 donations and 9 simultaneous claims, exactly 6 claims succ
 test('marriage bank: deposits, 8 phones on one deposit QR, payout pressed twice', async () => {
   await resetGame(db);
   await Promise.all([1, 2, 3, 4].map((g) => put(g, { money: 1000, food: 0, happiness: 5 })));
-  const w = qr('wed.wedding');
-  assert.ok((await Promise.all([1, 2].map((g) => scan(g, w)))).every(ok));
-  const w2 = qr('wed.wedding');
-  assert.ok((await Promise.all([3, 4].map((g) => scan(g, w2)))).every(ok));
+  assert.equal((await scan(1, qr('wed.wedding', { teamA: '1.1', teamB: '2.1' }))).ok, true);
+  assert.equal((await scan(4, qr('wed.wedding', { teamA: '3.1', teamB: '4.1' }))).ok, true);
   const dep = qr('wed.deposit', { amount: 300 });
   const eight = await Promise.all(Array.from({ length: 8 }, () => scan(1, dep)));
   assert.equal(count(eight, ok), 1, 'one deposit however many phones scan it');
@@ -263,11 +335,10 @@ test('teams: both teams of a group join at once, play separately, cannot marry e
   assert.equal((await scan('5.1', qr('ent.sauna'))).ok, true);
   assert.deepEqual([(await read('5.1')).money, (await read('5.2')).money], [400, 500]);
   // sister teams cannot marry; other groups' teams can
-  const w = qr('wed.wedding');
-  assert.equal((await scan('5.1', w)).ok, true);
-  assert.equal((await scan('5.2', w)).reason, 'same_group');
+  assert.equal((await scan('5.1', qr('wed.wedding', { teamA: '5.1', teamB: '5.2' }))).reason, 'same_group');
   await put('6.2', { married: false });
-  assert.equal((await scan('6.2', w)).ok, true);
+  assert.equal((await scan('5.1', qr('wed.wedding', { teamA: '5.1', teamB: '6.2' }))).ok, true);
+  assert.equal((await read('6.2')).married, true);
   assert.equal((await read('5.2')).married, false);
   assert.equal((await joinGroup(db, '5.3')).reason, 'missing_group');
   assert.equal((await joinGroup(db, '5')).reason, 'missing_group');
@@ -374,6 +445,11 @@ test('every station resolves end-to-end against the live database', async () => 
     const inputs = {};
     for (const f of station.fields) {
       inputs[f.key] = f.type === 'select' ? f.options[0].value : f.type === 'number' ? (f.default ?? 1) : false;
+    }
+    if (station.id === 'wed.wedding') {
+      const partner = id === 20 ? 19 : 20;
+      await put(partner, { married: false, marriageId: null });
+      Object.assign(inputs, { teamA: team(id), teamB: team(partner) });
     }
     const r = await scan(id, qr(station.id, inputs));
     assert.equal(r.ok, true, `${station.id}: ${r.reason}`);

@@ -15,7 +15,7 @@ import {
   isComplete, isValidGroupId, missingFields, newQrId, planReads, randomProfile,
   reasonMessage, resolveAdjustment, resolveGlobalEvent, resolveMarriagePayout, resolveScan,
   sanitizeInputs, summaryText, tallyVotes, validatePayload, groupTotals, isValidTeamId, parentOf,
-  poolCount, teamIdFor, teamsOf,
+  poolCount, teamIdFor, teamsOf, resolveHandMarriage, resolveHandUnmarry,
 } from '../src/game/engine.js';
 
 // ---------------------------------------------------------------- helpers ---
@@ -29,9 +29,13 @@ const baseGroup = (over = {}) => ({
 });
 
 // Inputs that make a station's QR complete, with optional overrides.
+// A wedding needs two teams of different groups; 1.1 and 2.1 by default.
+const WEDDING_DEFAULT = { teamA: '1.1', teamB: '2.1' };
+
 function inputsFor(station, over = {}) {
-  const i = {};
+  const i = station.id === 'wed.wedding' ? { ...WEDDING_DEFAULT } : {};
   for (const f of station.fields) {
+    if (i[f.key] !== undefined) continue;
     if (f.type === 'select') i[f.key] = f.options[0].value;
     else if (f.type === 'number') i[f.key] = f.default ?? (f.nonZero ? 1 : f.min);
     else i[f.key] = f.default;
@@ -49,10 +53,10 @@ function scan(stationId, inputs, group, extra = {}) {
     station,
     payload: buildPayload(stationId, inputsFor(station, inputs), extra.q || 'testQR1234', extra.t ?? T0),
     group,
-    groupId: extra.groupId || '1',
+    groupId: extra.groupId || (stationId === 'wed.wedding' ? '1.1' : '1'),
     limit: extra.limit ?? null,
     marriage: extra.marriage !== undefined ? extra.marriage : (stationId === 'wed.deposit' ? MARRIAGE_1_2 : null),
-    partners: extra.partners ?? {},
+    partners: extra.partners ?? (stationId === 'wed.wedding' ? { '2.1': baseGroup() } : {}),
     pool: extra.pool !== undefined ? extra.pool : (station.poolKey ? { count: 20 } : null),
     voting: extra.voting ?? null,
   });
@@ -526,16 +530,17 @@ test('teams: the leaderboard adds a group\'s teams together', () => {
   assert.deepEqual(groupTotals([]), []);
 });
 
-test('teams: sister teams cannot marry; the Final Will goes to either team of the winning group', () => {
-  const w1 = scan('wed.wedding', {}, baseGroup(), { groupId: '3.1', q: 'wedQR00002' });
-  assert.equal(w1.ok, true);
-  assert.equal(w1.summary.happiness, 5);
-  assert.equal(scan('wed.wedding', {}, baseGroup(), { groupId: '3.2', q: 'wedQR00002', marriage: w1.marriageWrite }).reason, 'same_group');
-  assert.deepEqual(scan('wed.wedding', {}, baseGroup(), { groupId: '4.1', q: 'wedQR00002', marriage: w1.marriageWrite }).marriageWrite.participants, ['3.1', '4.1']);
+test('teams: the Final Will goes to either team of the winning group', () => {
   const fw = (gid) => scan('secret.finalWill', {}, baseGroup(), { groupId: gid, voting: { status: 'done', winner: 3 }, limit: { holders: [] } });
   assert.equal(fw('3.1').ok, true);
   assert.equal(fw('3.2').ok, true);
   assert.equal(fw('4.1').reason, 'not_vote_winner');
+});
+
+test('supermarket: every supermarket QR is reusable; nothing else is', () => {
+  for (const s of STATIONS) assert.equal(!!s.repeatable, s.stage === 'supermarket', s.id);
+  assert.ok(describeStation(getStation('shop.buyApples'), inputsFor(getStation('shop.buyApples'), { price: 60 })).req
+    .some((r) => r.includes('Reusable')));
 });
 
 test('cooldown: supermarket and entertainment stations never have one', () => {
@@ -601,16 +606,91 @@ test('raffle: tickets accumulate privately', () => {
   assert.equal(r.groupUpdate.raffleTickets, 7);
 });
 
-test('wedding: two groups marry, a third is refused, married groups cannot remarry', () => {
-  const w1 = scan('wed.wedding', {}, baseGroup(), { groupId: '3', q: 'wedQR00001' });
-  assert.equal(w1.ok, true);
-  assert.equal(w1.marriageId, 'm_wedQR00001');
-  assert.deepEqual(w1.marriageWrite.participants, ['3']);
-  const w2 = scan('wed.wedding', {}, baseGroup(), { groupId: '7', q: 'wedQR00001', marriage: w1.marriageWrite });
-  assert.deepEqual(w2.marriageWrite.participants, ['3', '7']);
-  const w3 = scan('wed.wedding', {}, baseGroup(), { groupId: '8', q: 'wedQR00001', marriage: w2.marriageWrite });
-  assert.equal(w3.reason, 'marriage_full');
+test('wedding: the helper names both teams; one scan marries both at once', () => {
+  const partner = baseGroup({ happiness: 3 });
+  const w = scan('wed.wedding', { teamA: '3.1', teamB: '7.2' }, baseGroup({ happiness: 10 }),
+    { groupId: '3.1', q: 'wedQR00001', partners: { '7.2': partner } });
+  assert.equal(w.ok, true, w.reason);
+  assert.equal(w.marriageId, 'm_wedQR00001');
+  assert.deepEqual(w.marriageWrite.participants, ['3.1', '7.2']);
+  assert.equal(w.marriageWrite.pot, 0);
+  assert.equal(w.groupUpdate.married, true);
+  assert.equal(w.groupUpdate.happiness, 15);
+  assert.deepEqual(w.partnerUpdates, { '7.2': { married: true, marriageId: 'm_wedQR00001', happiness: 8 } });
+  // either team may be the one that scans
+  const fromB = scan('wed.wedding', { teamA: '3.1', teamB: '7.2' }, baseGroup(),
+    { groupId: '7.2', q: 'wedQR00001', partners: { '3.1': baseGroup() } });
+  assert.deepEqual(Object.keys(fromB.partnerUpdates), ['3.1']);
+  // once married, the partner scanning the same QR is told so
+  assert.equal(scan('wed.wedding', { teamA: '3.1', teamB: '7.2' }, baseGroup({ married: true, marriageId: 'm_wedQR00001' }),
+    { groupId: '7.2', q: 'wedQR00001', marriage: w.marriageWrite, partners: { '3.1': baseGroup({ married: true }) } }).reason, 'already_married');
+  // refusals
+  const W = (inputs, gid, partners, extra = {}) => scan('wed.wedding', inputs, baseGroup(), { groupId: gid, partners, ...extra });
+  assert.equal(W({ teamA: '3.1', teamB: '7.2' }, '5.1', { '7.2': baseGroup() }).reason, 'not_in_wedding');
+  assert.ok(reasonMessage('not_in_wedding', { a: '3.1', b: '7.2' }).includes('Team 3.1'));
+  assert.equal(W({ teamA: '3.1', teamB: '3.2' }, '3.1', { '3.2': baseGroup() }).reason, 'same_group');
+  assert.equal(W({ teamA: '3.1', teamB: '3.1' }, '3.1', {}).reason, 'same_group');
+  assert.equal(W({ teamA: '3.1', teamB: '7.2' }, '3.1', {}).reason, 'missing_partner');
+  assert.ok(reasonMessage('missing_partner', { team: '7.2' }).includes('Team 7.2'));
+  assert.equal(W({ teamA: '3.1', teamB: '7.2' }, '3.1', { '7.2': baseGroup({ married: true, marriageId: 'm_y' }) }).reason, 'partner_married');
+  assert.equal(W({ teamA: '3.1', teamB: '7.2' }, '3.1', { '7.2': baseGroup() }, { marriage: { participants: ['3.1', '7.2'], hasDivorced: true } }).reason, 'marriage_over');
   assert.equal(scan('wed.wedding', {}, baseGroup({ married: true, marriageId: 'm_x' })).reason, 'already_married');
+  const wedding = getStation('wed.wedding');
+  assert.deepEqual(missingFields(wedding, sanitizeInputs(wedding, { teamA: '3.1' })), ['teamB']);
+  assert.equal(sanitizeInputs(wedding, { teamA: '3.3', teamB: '1.1' }).teamA, null, 'unknown team ids are rejected');
+});
+
+test('marriage by hand: marries two teams, ending any old marriages without penalty', () => {
+  const single = (over = {}) => baseGroup({ married: false, marriageId: null, happiness: 4, ...over });
+  // the real-life case: two half-weddings, each team alone in its own marriage
+  const groups = {
+    '1.1': single({ married: true, marriageId: 'm_A' }),
+    '2.2': single({ married: true, marriageId: 'm_B' }),
+  };
+  const marriages = { m_A: { participants: ['1.1'], pot: 0 }, m_B: { participants: ['2.2'], pot: 0 } };
+  const r = resolveHandMarriage({ a: '1.1', b: '2.2', groups, marriages, bonus: true, newId: 'm_hX', t: T0 });
+  assert.equal(r.ok, true, r.reason);
+  assert.deepEqual(r.marriageWrites.m_hX.participants, ['1.1', '2.2']);
+  assert.equal(r.marriageWrites.m_A.hasDivorced, true);
+  assert.equal(r.marriageWrites.m_B.hasDivorced, true);
+  assert.deepEqual(r.groupUpdates['1.1'], { married: true, marriageId: 'm_hX', happiness: 9 });
+  assert.deepEqual(r.groupUpdates['2.2'], { married: true, marriageId: 'm_hX', happiness: 9 });
+  // no bonus: happiness untouched
+  assert.equal(resolveHandMarriage({ a: '1.1', b: '2.2', groups, marriages, newId: 'm_hY' }).groupUpdates['1.1'].happiness, undefined);
+  // a team in a full marriage: its old partner is freed, and the old pot is recorded, not paid
+  const g2 = { '1.1': single({ married: true, marriageId: 'm_C' }), '3.1': single({ married: true, marriageId: 'm_C' }), '4.1': single() };
+  const r2 = resolveHandMarriage({
+    a: '1.1', b: '4.1', groups: g2, marriages: { m_C: { participants: ['1.1', '3.1'], pot: 600 } }, newId: 'm_hZ',
+  });
+  assert.deepEqual(r2.groupUpdates['3.1'], { married: false, marriageId: null });
+  assert.equal(r2.marriageWrites.m_C.potAtDivorce, 600);
+  assert.equal(r2.marriageWrites.m_C.pot, 0);
+  assert.equal(r2.groupUpdates['1.1'].money, undefined, 'no divorce money');
+  // refusals
+  assert.equal(resolveHandMarriage({ a: '1.1', b: '1.2', groups: { '1.1': single(), '1.2': single() }, newId: 'm' }).reason, 'same_group');
+  assert.equal(resolveHandMarriage({ a: '1.1', b: '2.1', groups: { '1.1': single() }, newId: 'm' }).reason, 'missing_partner');
+  assert.equal(resolveHandMarriage({ a: '1.1', b: '9.9', groups: {}, newId: 'm' }).reason, 'missing_group');
+  const together = { '1.1': single({ married: true, marriageId: 'm_D' }), '2.1': single({ married: true, marriageId: 'm_D' }) };
+  assert.equal(resolveHandMarriage({ a: '1.1', b: '2.1', groups: together, marriages: { m_D: { participants: ['1.1', '2.1'] } }, newId: 'm' }).reason,
+    'already_married_together');
+  assert.ok(!reasonMessage('already_married_together').includes('undefined'));
+});
+
+test('marriage by hand: ending a marriage frees both teams with no penalty', () => {
+  const groups = {
+    '1.1': baseGroup({ married: true, marriageId: 'm_E', money: 100, food: 1, happiness: 1 }),
+    '2.1': baseGroup({ married: true, marriageId: 'm_E' }),
+  };
+  const r = resolveHandUnmarry({ team: '1.1', groups, marriage: { participants: ['1.1', '2.1'], pot: 300 }, t: T0 });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.groupUpdates, { '1.1': { married: false, marriageId: null }, '2.1': { married: false, marriageId: null } });
+  assert.equal(r.marriageWrite.hasDivorced, true);
+  assert.equal(r.pot, 300);
+  // a half wedding: just frees the one team
+  const half = resolveHandUnmarry({ team: '1.1', groups: { '1.1': groups['1.1'] }, marriage: { participants: ['1.1'] } });
+  assert.deepEqual(Object.keys(half.groupUpdates), ['1.1']);
+  assert.equal(resolveHandUnmarry({ team: '3.1', groups: { '3.1': baseGroup() } }).reason, 'not_married');
+  assert.equal(resolveHandUnmarry({ team: '3.1', groups: {} }).reason, 'missing_group');
 });
 
 test('divorce: ends the marriage for both groups; needs a marriage', () => {
@@ -636,7 +716,8 @@ test('planReads: fetches exactly the documents a decision needs', () => {
   assert.deepEqual(p('college.phd', { result: 'pass' }), { limitKey: 'phd' });
   assert.deepEqual(p('college.phd', { result: 'fail' }), {});
   assert.deepEqual(p('illegal.assassin', {}), { limitKey: 'assassin' });
-  assert.deepEqual(p('wed.wedding', {}), { marriageId: 'm_qrABCDEF12' });
+  assert.deepEqual(p('wed.wedding', {}, { team: '1.1' }), { marriageId: 'm_qrABCDEF12', partnerIds: ['2.1'] });
+  assert.deepEqual(p('wed.wedding', { teamA: '4.2', teamB: '9.1' }, { team: '9.1' }), { marriageId: 'm_qrABCDEF12', partnerIds: ['4.2'] });
   assert.deepEqual(p('wed.divorce', {}, { marriageId: 'm_z' }), { marriageId: 'm_z', readPartners: true });
   assert.deepEqual(p('wed.deposit', { amount: 100 }, { marriageId: 'm_z' }), { marriageId: 'm_z' });
   assert.deepEqual(p('shop.donate', { apples: 1 }), { poolKey: 'apples' });
@@ -734,9 +815,9 @@ test('wording: every reason, station and summary renders', () => {
     'needs_gymMember', 'already_gymMember', 'already_married', 'not_married', 'marriage_full', 'marriage_over',
     'already_done', 'cooldown', 'limit_reached', 'hungry', 'sad', 'poor', 'outdated', 'old_qr', 'incomplete_qr',
     'unknown_station', 'busy', 'internal', 'apples_full', 'pool_empty', 'marriage_not_ready', 'not_vote_winner',
-    'missing_partner', 'same_group', 'whatever'];
+    'missing_partner', 'same_group', 'not_in_wedding', 'partner_married', 'whatever'];
   for (const r of reasons) {
-    const m = reasonMessage(r, { level: 2, value: 500, minutes: 3, key: 'phd', label: 'Banker', room: 2, count: 1, winner: 4 });
+    const m = reasonMessage(r, { level: 2, value: 500, minutes: 3, key: 'phd', label: 'Banker', room: 2, count: 1, winner: 4, team: '2.1', a: '1.1', b: '2.1' });
     assert.ok(typeof m === 'string' && m.length > 5 && !m.includes('undefined'), `${r}: "${m}"`);
   }
   for (const key of Object.keys(LIMITS)) assert.ok(!reasonMessage('limit_reached', { key }).includes('undefined'));

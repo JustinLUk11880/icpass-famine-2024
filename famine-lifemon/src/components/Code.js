@@ -10,7 +10,7 @@ export default function Code({ payload }) {
 	const token = sign(payload, secret, { noTimestamp: true });
 	return (
 		<Paper className="qrcode" align="center" elevation={5}>
-			<QRCode bgColor="white" value={token} size={256} style={{ maxWidth: '100%', height: 'auto' }} />
+			<QRCode bgColor="white" value={token} size={320} style={{ maxWidth: '100%', height: 'auto' }} />
 		</Paper>
 	);
 }

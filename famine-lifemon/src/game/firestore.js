@@ -15,7 +15,8 @@ import {
 import { DEFAULT_GROUP_COUNT, MAX_GROUPS, getStation } from './catalog.js';
 import {
   eventRedemptionIdFor, isValidTeamId, newQrId, planReads, randomProfile, teamsOf,
-  redemptionIdFor, resolveAdjustment, resolveGlobalEvent, resolveMarriagePayout, resolveScan,
+  redemptionIdFor, resolveAdjustment, resolveGlobalEvent, resolveHandMarriage, resolveHandUnmarry,
+  resolveMarriagePayout, resolveScan,
 } from './engine.js';
 
 // Firestore serialises concurrent transactions on one document, but its own
@@ -53,7 +54,13 @@ export async function performScan(db, groupId, payload) {
   if (!isValidTeamId(gid)) return { ok: false, reason: 'missing_group' };
 
   const groupRef = doc(db, 'groups', gid);
-  const redemptionRef = doc(db, 'redemptions', redemptionIdFor(payload.q, gid));
+  // A reusable (supermarket) QR gets a fresh record per scan. The id is made
+  // once, outside the retry loop, so a retried transaction still finds its
+  // own earlier commit and never applies the same scan twice.
+  const redemptionId = station.repeatable
+    ? `${redemptionIdFor(payload.q, gid)}_${newQrId()}`
+    : redemptionIdFor(payload.q, gid);
+  const redemptionRef = doc(db, 'redemptions', redemptionId);
 
   return withRetry(() => runTransaction(db, async (tx) => {
     // All reads first - Firestore forbids reading after a write.
@@ -62,9 +69,13 @@ export async function performScan(db, groupId, payload) {
     const group = groupSnap.data();
 
     const redemptionSnap = await tx.get(redemptionRef);
-    if (redemptionSnap.exists()) return { ok: false, reason: 'already_scanned' };
+    if (redemptionSnap.exists()) {
+      // For a reusable QR this can only be our own retried commit.
+      if (station.repeatable) return { ok: true, duplicate: true, summary: redemptionSnap.data().summary };
+      return { ok: false, reason: 'already_scanned' };
+    }
 
-    const plan = planReads(station, payload, group);
+    const plan = planReads(station, payload, { ...group, team: gid });
 
     let limit = null;
     let limitRef = null;
@@ -88,6 +99,11 @@ export async function performScan(db, groupId, payload) {
           if (ps.exists()) partners[p] = ps.data();
         }
       }
+    }
+    for (const p of plan.partnerIds || []) {
+      if (p === gid || partners[p]) continue;
+      const ps = await tx.get(doc(db, 'groups', p));
+      if (ps.exists()) partners[p] = ps.data();
     }
 
     let voting = null;
@@ -196,6 +212,73 @@ export async function performGlobalEvent(db, eventId) {
     tx.set(logRef, clean({ kind: 'event', eventId, groupId: gid, at: Date.now(), summary: result.summary }));
     return { gid, status: 'applied', summary: result.summary };
   })).catch((e) => ({ gid, status: 'failed', reason: e?.code || String(e) }))));
+}
+
+// ------------------------------------------------------ marriages by hand ---
+
+async function readGroups(tx, db, ids, into) {
+  for (const id of ids) {
+    if (into[id] || !isValidTeamId(id)) continue;
+    const s = await tx.get(doc(db, 'groups', id));
+    if (s.exists()) into[id] = s.data();
+  }
+}
+
+export async function handMarry(db, a, b, { bonus = false } = {}) {
+  // Both ids are made once, outside the retry loop, so a retried
+  // transaction finds its own earlier commit instead of marrying twice.
+  const newId = `m_h${newQrId()}`;
+  const logId = `hand_${newQrId()}`;
+  return withRetry(() => runTransaction(db, async (tx) => {
+    const done = await tx.get(doc(db, 'redemptions', logId));
+    if (done.exists()) return { ok: true, duplicate: true, marriageId: newId };
+    const groups = {};
+    await readGroups(tx, db, [String(a), String(b)], groups);
+    const marriages = {};
+    for (const x of [String(a), String(b)]) {
+      const mid = groups[x]?.married && groups[x]?.marriageId ? String(groups[x].marriageId) : null;
+      if (!mid || marriages[mid] !== undefined) continue;
+      const ms = await tx.get(doc(db, 'marriages', mid));
+      marriages[mid] = ms.exists() ? ms.data() : null;
+      await readGroups(tx, db, (marriages[mid]?.participants || []).map(String), groups);
+    }
+    const r = resolveHandMarriage({ a, b, groups, marriages, bonus, newId, t: Date.now() });
+    if (!r.ok) return r;
+    for (const [id, m] of Object.entries(r.marriageWrites)) tx.set(doc(db, 'marriages', id), clean(m));
+    for (const [id, u] of Object.entries(r.groupUpdates)) tx.update(doc(db, 'groups', id), u);
+    tx.set(doc(db, 'redemptions', logId), clean({
+      kind: 'hand', groupId: String(a), partner: String(b), action: 'marry', bonus: !!bonus,
+      ended: r.ended, marriageId: r.marriageId, at: Date.now(),
+      summary: { money: 0, food: 0, happiness: bonus ? 5 : 0, marriage: 'wedding' },
+    }));
+    return r;
+  }));
+}
+
+export async function handUnmarry(db, team) {
+  const logId = `hand_${newQrId()}`;
+  return withRetry(() => runTransaction(db, async (tx) => {
+    const done = await tx.get(doc(db, 'redemptions', logId));
+    if (done.exists()) return { ok: true, duplicate: true };
+    const groups = {};
+    await readGroups(tx, db, [String(team)], groups);
+    const mid = groups[team]?.marriageId ? String(groups[team].marriageId) : null;
+    let marriage = null;
+    if (mid) {
+      const ms = await tx.get(doc(db, 'marriages', mid));
+      marriage = ms.exists() ? ms.data() : null;
+      await readGroups(tx, db, (marriage?.participants || []).map(String), groups);
+    }
+    const r = resolveHandUnmarry({ team, groups, marriage, t: Date.now() });
+    if (!r.ok) return r;
+    tx.set(doc(db, 'marriages', r.marriageId), clean(r.marriageWrite));
+    for (const [id, u] of Object.entries(r.groupUpdates)) tx.update(doc(db, 'groups', id), u);
+    tx.set(doc(db, 'redemptions', logId), clean({
+      kind: 'hand', groupId: String(team), action: 'unmarry', freed: r.freed, pot: r.pot,
+      marriageId: r.marriageId, at: Date.now(), summary: { money: 0, food: 0, happiness: 0, marriage: 'divorce' },
+    }));
+    return r;
+  }));
 }
 
 // --------------------------------------------------------- marriage payout ---

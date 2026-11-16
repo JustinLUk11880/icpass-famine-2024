@@ -65,6 +65,12 @@ const customEffect = (i) => ({
   penalty: !!i.penalty,
 });
 
+// Every team id, for the wedding's team pickers: 1.1, 1.2, 2.1 ... 20.2.
+const TEAM_OPTIONS = Array.from({ length: MAX_GROUPS * SUBGROUPS }, (_, i) => {
+  const id = `${Math.floor(i / SUBGROUPS) + 1}.${(i % SUBGROUPS) + 1}`;
+  return { value: id, label: `Team ${id}` };
+});
+
 // ---------------------------------------------------------------- stages ---
 
 export const STAGES = [
@@ -352,9 +358,12 @@ export const STATIONS = [
   },
 
   // Supermarket (RSM 2.28): shopping, not a game, so no cooldown.
+  // Supermarket QR codes are reusable: a team may buy, donate or receive
+  // again with the same code. Every scan is logged separately.
   {
     id: 'shop.buyApples',
     stage: 'supermarket',
+    repeatable: true,
     label: 'Buy apples',
     minEducation: EDU.NONE,
     fields: [
@@ -367,6 +376,7 @@ export const STATIONS = [
   {
     id: 'shop.donate',
     stage: 'supermarket',
+    repeatable: true,
     label: 'Donate apples',
     minEducation: EDU.NONE,
     fields: [number('apples', 'Apples donated', 1, APPLE_MAX, 1)],
@@ -377,6 +387,7 @@ export const STATIONS = [
   {
     id: 'shop.receive',
     stage: 'supermarket',
+    repeatable: true,
     label: 'Receive donated apples',
     minEducation: EDU.NONE,
     fields: [number('apples', 'Apples received', 1, APPLE_MAX, 1)],
@@ -427,9 +438,19 @@ export const STATIONS = [
     stage: 'wedding',
     label: 'Wedding',
     minEducation: EDU.NONE,
-    fields: [],
-    effect: () => ({ happiness: 5, marriage: 'wedding', checks: [{ type: 'notMarried' }] }),
-    notes: 'BOTH teams scan this same QR to marry each other: free, and +5 happiness each. Teams of the same group cannot marry. They then save money together with "Bank: deposit".',
+    // The helper names both teams, so one scan by either team marries both:
+    // there is no half-married state to get stuck in.
+    fields: [
+      select('teamA', 'First team', TEAM_OPTIONS),
+      select('teamB', 'Second team', TEAM_OPTIONS),
+    ],
+    effect: (i) => ({
+      happiness: 5,
+      marriage: 'wedding',
+      couple: [i.teamA, i.teamB],
+      checks: [{ type: 'notMarried' }],
+    }),
+    notes: 'Pick both teams, then ONE person from either team scans: both teams are married at once, +5 happiness each. Free. Teams of the same group cannot marry. They then save money together with "Bank: deposit".',
   },
   {
     id: 'wed.deposit',

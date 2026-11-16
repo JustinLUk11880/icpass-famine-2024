@@ -131,6 +131,7 @@ export function effectOf(station, inputs) {
     marriage: e.marriage || null,
     deposit: Math.max(0, Math.trunc(num(e.deposit))),
     pool: e.pool && e.pool.key ? { key: String(e.pool.key), delta: Math.trunc(num(e.pool.delta)) } : null,
+    couple: Array.isArray(e.couple) ? e.couple.map((x) => (x == null ? null : String(x))) : null,
   };
 }
 
@@ -169,7 +170,11 @@ export function planReads(station, payload, group) {
   if (e.limit) plan.limitKey = e.limit.key;
   if (e.pool) plan.poolKey = e.pool.key;
   if (e.checks.some((c) => c.type === 'voteWinner')) plan.votingId = 'finalWill';
-  if (e.marriage === 'wedding' && typeof payload?.q === 'string') plan.marriageId = marriageIdFor(payload.q);
+  if (e.marriage === 'wedding' && typeof payload?.q === 'string') {
+    plan.marriageId = marriageIdFor(payload.q);
+    // The other team of the couple, read so both can be married at once.
+    plan.partnerIds = (e.couple || []).filter((t) => isValidTeamId(t) && t !== String(group?.team ?? ''));
+  }
   if ((e.marriage === 'deposit' || e.marriage === 'divorce') && group?.marriageId) {
     plan.marriageId = String(group.marriageId);
   }
@@ -318,20 +323,32 @@ export function resolveScan({
   const partnerUpdates = {};
   if (e.marriage === 'wedding') {
     marriageId = marriageIdFor(payload.q);
-    const parts = marriageParts(marriage);
-    if (marriage?.hasDivorced || marriage?.paidOut) return fail('marriage_over');
-    if (!parts.includes(gid) && parts.length >= 2) return fail('marriage_full');
-    // Sister teams of one group cannot marry each other.
-    if (parts.some((p) => p !== gid && parentOf(p) === parentOf(gid))) return fail('same_group');
+    const [a, b] = e.couple || [];
+    if (!isValidTeamId(a) || !isValidTeamId(b)) return fail('incomplete_qr');
+    // Sister teams of one group (or a team with itself) cannot marry.
+    if (parentOf(a) === parentOf(b)) return fail('same_group');
+    if (gid !== a && gid !== b) return fail('not_in_wedding', { a, b });
+    const other = gid === a ? b : a;
+    // This QR has already been used for a wedding (one that has since ended:
+    // a live one would have failed notMarried above).
+    if (marriage) return fail('marriage_over');
+    const partner = partners[other];
+    if (!partner) return fail('missing_partner', { team: other });
+    if (partner.married) return fail('partner_married', { team: other });
     marriageWrite = {
-      participants: parts.includes(gid) ? parts : [...parts, gid],
+      participants: [a, b],
       hasDivorced: false,
-      createdAt: marriage?.createdAt ?? t,
-      pot: potOf(marriage),
-      deposits: { ...(marriage?.deposits || {}) },
+      createdAt: t,
+      pot: 0,
+      deposits: {},
     };
     groupUpdate.married = true;
     groupUpdate.marriageId = marriageId;
+    partnerUpdates[other] = {
+      married: true,
+      marriageId,
+      happiness: applyStat(num(partner.happiness), e.happiness, true).value,
+    };
   } else if (e.marriage === 'deposit') {
     marriageId = String(group.marriageId);
     const deposits = { ...(marriage.deposits || {}) };
@@ -415,6 +432,88 @@ export function tallyVotes(votes = []) {
     .sort((a, b) => b.count - a.count || a.group - b.group);
   const top = rows.length ? rows[0].count : 0;
   return { rows, leaders: rows.filter((r) => r.count === top && top > 0).map((r) => r.group), total: votes.length };
+}
+
+// ----------------------------------------------------- marriages by hand ---
+
+// Helper-page repair: marry two teams directly. Any marriage either team is
+// in (complete or half-formed) is ended first, with no penalty, and its other
+// team is freed. `groups` maps team id -> document for both teams and for
+// those old partners; `marriages` maps marriage id -> document.
+export function resolveHandMarriage({
+  a, b, groups = {}, marriages = {}, bonus = false, newId, t = Date.now(),
+}) {
+  a = String(a);
+  b = String(b);
+  if (!isValidTeamId(a) || !isValidTeamId(b)) return fail('missing_group');
+  if (parentOf(a) === parentOf(b)) return fail('same_group');
+  if (!groups[a]) return fail('missing_partner', { team: a });
+  if (!groups[b]) return fail('missing_partner', { team: b });
+  const current = (x) => (groups[x].married && groups[x].marriageId ? String(groups[x].marriageId) : null);
+  if (current(a) && current(a) === current(b)) {
+    const parts = marriageParts(marriages[current(a)]);
+    if (parts.includes(a) && parts.includes(b)) return fail('already_married_together');
+  }
+  const groupUpdates = {};
+  const marriageWrites = {};
+  const ended = [];
+  for (const x of [a, b]) {
+    const mid = current(x);
+    if (!mid || marriageWrites[mid]) continue;
+    const m = marriages[mid];
+    marriageWrites[mid] = {
+      ...(m || {}),
+      participants: m ? marriageParts(m) : [x],
+      hasDivorced: true,
+      dissolvedBy: 'helper',
+      dissolvedAt: t,
+      potAtDivorce: potOf(m),
+      pot: 0,
+    };
+    for (const p of marriageParts(m)) {
+      if (p === a || p === b) continue;
+      if (groups[p] && String(groups[p].marriageId) === mid) groupUpdates[p] = { married: false, marriageId: null };
+    }
+    ended.push({ id: mid, participants: marriageParts(m), pot: potOf(m) });
+  }
+  const id = String(newId);
+  marriageWrites[id] = { participants: [a, b], hasDivorced: false, createdAt: t, pot: 0, deposits: {}, byHelper: true };
+  for (const x of [a, b]) {
+    groupUpdates[x] = { married: true, marriageId: id };
+    if (bonus) groupUpdates[x].happiness = applyStat(num(groups[x].happiness), 5, true).value;
+  }
+  return { ok: true, marriageId: id, groupUpdates, marriageWrites, ended };
+}
+
+// Helper-page repair: end a team's marriage for both teams, with no divorce
+// money or penalty. The pot is recorded but not paid out.
+export function resolveHandUnmarry({ team, groups = {}, marriage = null, t = Date.now() }) {
+  team = String(team);
+  const g = groups[team];
+  if (!g) return fail('missing_group');
+  if (!g.married || !g.marriageId) return fail('not_married');
+  const mid = String(g.marriageId);
+  const parts = marriageParts(marriage);
+  const groupUpdates = { [team]: { married: false, marriageId: null } };
+  for (const p of parts) {
+    if (p !== team && groups[p] && String(groups[p].marriageId) === mid) groupUpdates[p] = { married: false, marriageId: null };
+  }
+  return {
+    ok: true,
+    marriageId: mid,
+    groupUpdates,
+    marriageWrite: {
+      ...(marriage || {}),
+      participants: parts.length ? parts : [team],
+      hasDivorced: true,
+      dissolvedBy: 'helper',
+      dissolvedAt: t,
+      potAtDivorce: potOf(marriage),
+      pot: 0,
+    },
+    pot: potOf(marriage),
+    freed: Object.keys(groupUpdates),
+  };
 }
 
 // ------------------------------------------------------ marriage payout ---
@@ -598,7 +697,9 @@ export function reasonMessage(reason, detail = {}) {
     case 'not_married': return 'Your group is not married.';
     case 'marriage_full': return 'This wedding already has two groups.';
     case 'marriage_over': return 'This marriage has already ended.';
-    case 'missing_partner': return 'The partner group account was not found.';
+    case 'missing_partner': return detail.team
+      ? `Team ${detail.team} has not joined yet - someone from that team must open the site first.`
+      : 'The partner team account was not found.';
     case 'already_done': return 'Your group has already done this - it can only be done once.';
     case 'cooldown': return `Too soon - your group can play ${detail.label || 'this'} again in ${detail.minutes} min.`;
     case 'apples_full': return detail.room
@@ -609,6 +710,9 @@ export function reasonMessage(reason, detail = {}) {
       : 'The donation box is empty.';
     case 'not_vote_winner': return `The Final Will went to Group ${detail.winner} - only a team of that group can scan this.`;
     case 'same_group': return 'Teams from the same group cannot marry each other.';
+    case 'not_in_wedding': return `This wedding QR is for Team ${detail.a} and Team ${detail.b} - not your team.`;
+    case 'already_married_together': return 'These two teams are already married to each other.';
+    case 'partner_married': return `Team ${detail.team} is already married.`;
     case 'marriage_not_ready': return 'Your partner group has not scanned the wedding QR yet.';
     case 'limit_reached': return LIMIT_REACHED[detail.key] || 'No places left for this.';
     case 'hungry': return 'Your group does not have enough apples.';
@@ -643,6 +747,7 @@ export function describeStation(station, inputs) {
   }
   if (e.pool && e.pool.delta < 0) req.push('Donation box must have enough apples');
   if (e.once) req.push('Once per group');
+  if (station.repeatable) req.push('Reusable QR: a team can scan it again');
   if (e.limit) req.push(`Max ${e.limit.max} ${e.limit.max === 1 ? 'team' : 'teams'} for the whole event`);
   if (e.cooldown) req.push(`${Math.round(e.cooldown.ms / MINUTE)}-min cooldown per group (losses count)`);
   const delta = formatDelta(e);
@@ -651,7 +756,11 @@ export function describeStation(station, inputs) {
   if (e.raffle) fx.push(`+${e.raffle} raffle ticket${e.raffle === 1 ? '' : 's'}`);
   if (e.setFlag === 'gymMember') fx.push('Becomes a gym member');
   if (e.penalty) fx.push('Penalty: applies even if they cannot afford it (stops at 0)');
-  if (e.marriage === 'wedding') fx.push('Both groups scan this same QR');
+  if (e.marriage === 'wedding') {
+    const [a, b] = e.couple || [];
+    fx.push(`Marries Team ${a} and Team ${b}: +5 😄 each`);
+    fx.push('One scan by either team is enough');
+  }
   if (e.marriage === 'deposit') fx.push(`$${e.deposit} goes into the marriage pot`);
   if (e.marriage === 'divorce') {
     fx.push('Divorcing group: + pot x 1.5, −3 😄, −10 🍎');

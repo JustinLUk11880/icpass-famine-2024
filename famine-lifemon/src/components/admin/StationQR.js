@@ -161,9 +161,13 @@ export default function StationQR() {
               <Code payload={payload} />
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }}>
                 <Typography fontSize={13} color="text.secondary">
-                  QR <strong>{qrId.slice(0, 4)}</strong> · each group can scan it once
+                  QR <strong>{qrId.slice(0, 4)}</strong> · {station.repeatable
+                    ? 'reusable: teams can scan it again'
+                    : station.id === 'wed.wedding' ? 'one scan marries both teams' : 'each team can scan it once'}
                 </Typography>
-                <Button size="small" variant="outlined" onClick={fresh}>New QR for the next group</Button>
+                {!station.repeatable && (
+                  <Button size="small" variant="outlined" onClick={fresh}>New QR for the next team</Button>
+                )}
               </Box>
             </>
           )}

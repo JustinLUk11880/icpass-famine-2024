@@ -44,9 +44,11 @@ group's total.
 
 **At a station:** on `/helper` → Station QR, choose the stage and station,
 then fill in the result. The QR only appears once every choice is made, and
-the page shows what the group will get and what they need. **Each group can
-scan a QR code once** - press *New QR for the next group* when the same group
-comes back (gym sets, another police shift). Codes expire after 2 minutes.
+the page shows what the team will get and what they need. **Each team can
+scan a QR code once** - press *New QR for the next team* when the same team
+comes back (gym sets, another police shift). **Supermarket codes are the
+exception: they are reusable**, so a team can buy, donate or receive again
+with the same code. Codes expire after 2 minutes.
 
 **Live events tab:** send an announcement to every phone (e.g. when the
 robbery starts), and apply *Pandemic Pass-26* or the *ICPASS Tax* to every
@@ -61,8 +63,10 @@ group. Each group is hit once even if the button is pressed twice.
 - **Pay out marriages (end of LifeMon):** every married couple gets pot x 2
   and +10 apples each. Pays each marriage once.
 
-**Groups tab:** every group's stats, the PhD / assassin / Final Will places
-taken, marriages with their pots, the donation box, *Fix a mistake / award a
+**Groups tab:** every team's stats, the PhD / assassin / Final Will places
+taken, marriages with their pots, the donation box, *Fix a marriage by hand*
+(marry any two teams directly - ending any marriage either is in first - or
+end a team's marriage with no penalty), *Fix a mistake / award a
 prize* (also how to pay raffle prizes, and *Clear cooldowns* to let a group
 replay a station), the raffle draw weighted by tickets, and a log of every scan.
 
@@ -101,8 +105,8 @@ comment at the top of `catalog.js`).
   ($50-$200), refused if the team cannot hold them; donate apples into a
   shared box (+2 happiness); receive from the box only if the team has under
   $200. The box starts with 50 apples after every reset.
-- **Wedding and bank:** both teams scan the same wedding QR (free, +5 happiness
-  each). Each team
+- **Wedding and bank:** the helper picks both teams on the wedding QR, and one
+  scan by either team marries both at once (free, +5 happiness each). Each team
   then deposits $100-$500 into the shared pot, secretly, every 30 minutes.
   Divorce: the group that scans gets pot x 1.5, -3 happiness, -10 apples; the
   other group gets +3 happiness, +10 apples. At the end, *Pay out marriages*.
@@ -111,6 +115,13 @@ comment at the top of `catalog.js`).
 - **Awards:** the leaderboard ranks Monopoly (money), Joy Master (happiness)
   and Wellness King/Queen (apples) separately. Raffle tickets are never shown
   to other groups.
+
+## Phones stay up to date without reloading
+
+Every passport is a live view of its team. When a phone wakes up or comes
+back online, the app forces a fresh connection, and a listener that errors
+reconnects by itself, so helper fixes and other members' scans appear
+without a reload.
 
 ## How a scan stays correct when a whole group scans at once
 
