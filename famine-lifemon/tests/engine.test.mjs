@@ -632,10 +632,18 @@ test('limits: PhD max 2 groups, assassin and Final Will max 1', () => {
   assert.equal(scan('secret.finalWill', {}, baseGroup(), { groupId: '2', limit: { holders: ['5'] } }).reason, 'limit_reached');
 });
 
-test('robbery: only teams under $500 may attempt', () => {
+test('robbery: only teams under the limit the helper sets ($500 by default) may attempt', () => {
   assert.equal(scan('secret.robbery', {}, baseGroup({ money: 500 })).reason, 'too_rich');
   assert.equal(scan('secret.robbery', {}, baseGroup({ money: 499 })).ok, true);
   assert.equal(scan('secret.robbery', {}, baseGroup({ money: 0 })).summary.money, 2000);
+  // a $1000 day
+  assert.equal(scan('secret.robbery', { limit: 1000 }, baseGroup({ money: 999 })).ok, true);
+  assert.equal(scan('secret.robbery', { limit: 1000 }, baseGroup({ money: 1000 })).reason, 'too_rich');
+  assert.ok(reasonMessage('too_rich', { value: 1000 }).includes('less than $1,000'));
+  const robbery = getStation('secret.robbery');
+  assert.equal(sanitizeInputs(robbery, {}).limit, 500, 'defaults to $500');
+  assert.equal(sanitizeInputs(robbery, { limit: 999999 }).limit, 10000, 'clamped');
+  assert.ok(describeStation(robbery, { limit: 1000 }).req.includes('Only teams with less than $1,000'));
 });
 
 test('gym: membership once, challenges need membership', () => {

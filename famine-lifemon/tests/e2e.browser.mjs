@@ -353,6 +353,16 @@ const shop = await readQR(helper);
     `the same supermarket QR scanned twice = two purchases (🍎 ${before.food}->${after.food}, $${before.money}->$${after.money})`);
 }
 
+// 8b. Robbery: the helper sets today's money limit before showing the QR.
+await openHelper(helper);
+await choose(helper, 'Stage', 'Secret tasks');
+await choose(helper, 'Station', 'Robbery (success)');
+await waitText(helper, 'Only teams with less than $500');
+await typeInto(helper, 'Only teams with less than ($)', 1000);
+await waitText(helper, 'Only teams with less than $1,000');
+const robbery = await readQR(helper);
+check(robbery.payload.i.limit === 1000, `the robbery QR carries the $1000 limit typed on the helper page (${robbery.payload.i.limit})`);
+
 // 9. Pandemic through the confirm dialog.
 await openHelper(helper);
 await clickButton(helper, 'Live events');

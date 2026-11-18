@@ -96,7 +96,9 @@ comment at the top of `catalog.js`).
   in N min" so a helper can check before the group plays.
 - **University jobs** (surgeon, banker, lawyer): win +$350, lose -$50, and the
   work costs 1 apple either way. Engineer: win +$500, 1 apple either way.
-- **Robbery** only for groups under $500; the police who stop it scan
+- **Robbery** only for teams under a money limit the helper types on the
+  Robbery QR page before showing it ($500 by default; $1000 on a generous
+  day). The police who stop it scan
   *Police: stopped the robbery* (+$500).
 - **Teams:** every station rule (cooldowns, once-only, limits, robbery under
   $500, marriages, Pandemic and Tax) applies per team. Teams of the same group

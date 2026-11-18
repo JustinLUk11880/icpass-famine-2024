@@ -734,7 +734,7 @@ export function reasonMessage(reason, detail = {}) {
     case 'already_scanned': return 'Your group has already used this QR code.';
     case 'needs_education': return `Your group needs a ${EDUCATION_LABELS[detail.level] || 'higher'} degree for this.`;
     case 'already_qualified': return 'Your group already holds this qualification.';
-    case 'too_rich': return `Only groups with under $${detail.value} can do this.`;
+    case 'too_rich': return `Only teams with less than $${Number(detail.value).toLocaleString('en-US')} can do this.`;
     case 'needs_gymMember': return 'Gym members only - buy a membership first.';
     case 'already_gymMember': return 'Your group is already a gym member.';
     case 'already_married': return 'Your group is already married.';
@@ -782,7 +782,7 @@ export function describeStation(station, inputs) {
   const e = effectOf(station, inputs);
   for (const c of e.checks) {
     if (c.type === 'belowEducation') req.push(`Not for groups already holding ${EDUCATION_LABELS[c.level]}`);
-    if (c.type === 'moneyBelow') req.push(`Only groups under $${c.value}`);
+    if (c.type === 'moneyBelow') req.push(`Only teams with less than $${Number(c.value).toLocaleString('en-US')}`);
     if (c.type === 'flag' && c.flag === 'gymMember') req.push('Gym members only');
     if (c.type === 'notFlag' && c.flag === 'gymMember') req.push('Not for existing members');
     if (c.type === 'notMarried') req.push('Not for married groups');

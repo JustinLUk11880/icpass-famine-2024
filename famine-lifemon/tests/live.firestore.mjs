@@ -209,6 +209,15 @@ test('supermarket QR codes are reusable; each scan applies once, even 8 phones a
   assert.equal((await scan(2, sauna)).reason, 'already_scanned');
 });
 
+test('robbery: the money limit set on the QR ($500 or $1000) is what counts', async () => {
+  await put(10, { money: 700 });
+  assert.equal((await scan(10, qr('secret.robbery', { limit: 500 }))).reason, 'too_rich');
+  assert.equal((await scan(10, qr('secret.robbery', { limit: 1000 }))).ok, true);
+  assert.equal((await read(10)).money, 2700);
+  await put(11, { money: 1000 });
+  assert.equal((await scan(11, qr('secret.robbery', { limit: 1000 }))).reason, 'too_rich', 'exactly $1000 is not under $1000');
+});
+
 test('once-only and cooldown hold across separate QR codes', async () => {
   await put(4, { education: EDU.SECONDARY, food: 8, happiness: 10 });
   assert.equal((await scan(4, qr('jobs.teacher'))).ok, true);

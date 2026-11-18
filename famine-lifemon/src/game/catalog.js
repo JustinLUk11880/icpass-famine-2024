@@ -314,9 +314,11 @@ export const STATIONS = [
     stage: 'secret',
     label: 'Robbery (success)',
     minEducation: EDU.NONE,
-    fields: [],
-    effect: () => ({ money: 2000, checks: [{ type: 'moneyBelow', value: 500 }] }),
-    notes: 'Starts 16:15, RSM 1.31C / 2.28B. Send the "Robbery started" announcement when they shout 打劫! Only teams under $500 may attempt. Caught teams go to Prisoner; the police team gets "Police: stopped the robbery".',
+    // The money limit is decided on the day ($500 or $1000 in the documents),
+    // so the helper sets it on the QR page and it travels inside the QR.
+    fields: [number('limit', 'Only teams with less than ($)', 100, 10000, 500)],
+    effect: (i) => ({ money: 2000, checks: [{ type: 'moneyBelow', value: i.limit }] }),
+    notes: 'Starts 16:15, RSM 1.31C / 2.28B. Set the money limit for today ($500 or $1000) before showing the QR. Send the "Robbery started" announcement when they shout 打劫! Only teams under the limit may attempt. Caught teams go to Prisoner; the police team gets "Police: stopped the robbery".',
   },
 
   // Entertainment: no cooldown.
