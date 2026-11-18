@@ -32,6 +32,7 @@ export default function GroupTotal({ teamId, mine }) {
         {cell('💰 Money', `$${sum('money').toLocaleString('en-US')}`)}
         {cell('😄 Happiness', `× ${sum('happiness')}`)}
         {cell('🍎 Apples', sum('food'))}
+        {cell('💝 Charity', sum('charity'))}
       </Box>
     </Paper>
   );

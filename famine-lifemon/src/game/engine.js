@@ -55,14 +55,45 @@ export function groupTotals(teams = []) {
   for (const t of teams) {
     if (!t || !isValidTeamId(t.id)) continue;
     const id = parentOf(t.id);
-    const cur = byGroup.get(id) || { id, money: 0, happiness: 0, food: 0, teams: 0 };
+    const cur = byGroup.get(id) || { id, money: 0, happiness: 0, food: 0, charity: 0, teams: 0 };
     cur.money += stat(t.data, 'money');
     cur.happiness += stat(t.data, 'happiness');
     cur.food += stat(t.data, 'food');
+    cur.charity += stat(t.data, 'charity');
     cur.teams += 1;
     byGroup.set(id, cur);
   }
   return [...byGroup.values()].sort((a, b) => a.id - b.id);
+}
+
+// Raffle: the ticket money is the prize pool ($50 a ticket). One winner
+// takes it all, or - "if too many raffle tickets are bought" - 1st prize
+// gets 70% and 2nd prize 30%.
+export const RAFFLE_TICKET_PRICE = 50;
+export function rafflePrizes(totalTickets, mode = 'all') {
+  const pool = Math.max(0, Math.trunc(num(totalTickets))) * RAFFLE_TICKET_PRICE;
+  if (mode === 'split') {
+    const first = Math.round(pool * 0.7);
+    return { pool, first, second: pool - first };
+  }
+  return { pool, first: pool, second: 0 };
+}
+
+// Overall winner: "weight stats (40% happiness / 20% money / 30% apple /
+// 10% charity)". The stats have very different scales, so each is first
+// divided by the best group's value (the leader in a stat scores 1 for it),
+// then weighted. Scores run from 0 to 100.
+export const OVERALL_WEIGHTS = { happiness: 0.4, money: 0.2, food: 0.3, charity: 0.1 };
+export function overallScores(groups = []) {
+  const best = {};
+  for (const k of Object.keys(OVERALL_WEIGHTS)) best[k] = Math.max(0, ...groups.map((g) => num(g[k])));
+  return groups.map((g) => {
+    let score = 0;
+    for (const [k, w] of Object.entries(OVERALL_WEIGHTS)) {
+      if (best[k] > 0) score += w * (Math.max(0, num(g[k])) / best[k]);
+    }
+    return { ...g, overall: Math.round(score * 1000) / 10 };
+  });
 }
 
 // The donation box counts as full (INITIAL_DONATION_APPLES) until first used.
@@ -127,6 +158,7 @@ export function effectOf(station, inputs) {
     limit: e.limit || null,
     cooldown: e.cooldown || null,
     raffle: Math.max(0, Math.trunc(num(e.raffle))),
+    charity: Math.max(0, Math.trunc(num(e.charity))),
     setFlag: e.setFlag || null,
     marriage: e.marriage || null,
     deposit: Math.max(0, Math.trunc(num(e.deposit))),
@@ -229,9 +261,10 @@ export function resolveScan({
     if (c.type === 'married' && !(group.married && group.marriageId)) return fail('not_married');
     // Only enforced once the in-app vote has announced a winner, so the QR
     // still works if the vote is run on paper instead.
-    if (c.type === 'voteWinner' && voting?.winner != null && Number(voting.winner) !== parentOf(gid)) {
+    if (c.type === 'voteWinner' && voting?.winner != null && String(voting.winner) !== gid) {
       return fail('not_vote_winner', { winner: voting.winner });
     }
+    if (c.type === 'noApples' && num(group.food) > 0) return fail('has_apples');
     if (c.type === 'appleRoom') {
       const room = APPLE_MAX - Math.max(0, Math.trunc(num(group.food)));
       if (room < c.count) return fail('apples_full', { room: Math.max(0, room) });
@@ -316,6 +349,7 @@ export function resolveScan({
   if (e.once) groupUpdate.once = once;
   if (e.cooldown) groupUpdate.cooldowns = cooldowns;
   if (e.raffle) groupUpdate.raffleTickets = Math.trunc(num(group.raffleTickets)) + e.raffle;
+  if (e.charity) groupUpdate.charity = Math.max(0, Math.trunc(num(group.charity))) + e.charity;
   if (e.setFlag) groupUpdate[e.setFlag] = true;
 
   let marriageId = null;
@@ -408,6 +442,7 @@ export function resolveScan({
       educationTo: education !== edu ? education : null,
       capped,
       raffle: e.raffle,
+      charity: e.charity,
       marriage: e.marriage,
       deposit: e.deposit || 0,
       gymMember: e.setFlag === 'gymMember',
@@ -417,21 +452,24 @@ export function resolveScan({
 
 // -------------------------------------------------------- final will vote ---
 
-// Each group casts one vote (changeable while voting is open) for another
-// group. Returns every voted-for group with its count, most votes first,
-// and the leaders - more than one leader means a tie for the helper to break.
+// Each team casts one vote (changeable while voting is open) for a team of
+// another group: not itself and not its sister team. Returns every voted-for
+// team with its count, most votes first, and the leaders - more than one
+// leader means a tie for the helper to break.
+export const canVoteFor = (voter, target) => isValidTeamId(String(voter)) && isValidTeamId(String(target))
+  && parentOf(voter) !== parentOf(target);
+const teamOrder = (a, b) => parentOf(a) - parentOf(b) || String(a).localeCompare(String(b));
 export function tallyVotes(votes = []) {
   const counts = new Map();
   for (const v of votes) {
-    if (!v || !isValidGroupId(v.voter) || !isValidGroupId(String(v.for))) continue;
-    if (String(v.voter) === String(v.for)) continue;
-    const k = Number(v.for);
+    if (!v || !canVoteFor(v.voter, v.for)) continue;
+    const k = String(v.for);
     counts.set(k, (counts.get(k) || 0) + 1);
   }
-  const rows = [...counts.entries()].map(([group, count]) => ({ group, count }))
-    .sort((a, b) => b.count - a.count || a.group - b.group);
+  const rows = [...counts.entries()].map(([team, count]) => ({ team, count }))
+    .sort((a, b) => b.count - a.count || teamOrder(a.team, b.team));
   const top = rows.length ? rows[0].count : 0;
-  return { rows, leaders: rows.filter((r) => r.count === top && top > 0).map((r) => r.group), total: votes.length };
+  return { rows, leaders: rows.filter((r) => r.count === top && top > 0).map((r) => r.team), total: votes.length };
 }
 
 // ----------------------------------------------------- marriages by hand ---
@@ -599,7 +637,7 @@ export function resolveGlobalEvent(eventId, group) {
 // Helper-side correction. Deltas stop at 0 and apples stay within the cap;
 // an education value, when given, is set outright.
 export function resolveAdjustment(group, {
-  money = 0, food = 0, happiness = 0, education = null, clearCooldowns = false,
+  money = 0, food = 0, happiness = 0, charity = 0, education = null, clearCooldowns = false,
 } = {}) {
   if (!group) return fail('missing_group');
   const cur = { money: num(group.money), food: num(group.food), happiness: num(group.happiness) };
@@ -610,6 +648,9 @@ export function resolveAdjustment(group, {
     happiness: applyStat(cur.happiness, d.happiness, true).value,
   };
   const groupUpdate = { ...next };
+  const curCharity = Math.max(0, Math.trunc(num(group.charity)));
+  const dCharity = Math.trunc(num(charity));
+  if (dCharity) groupUpdate.charity = Math.max(0, curCharity + dCharity);
   const edu = Number(education);
   if (education !== null && education !== '' && Number.isInteger(edu) && edu >= EDU.NONE && edu <= EDU.PHD) {
     groupUpdate.education = edu;
@@ -622,6 +663,7 @@ export function resolveAdjustment(group, {
       money: next.money - cur.money,
       food: next.food - cur.food,
       happiness: next.happiness - cur.happiness,
+      charity: dCharity ? groupUpdate.charity - curCharity : 0,
       educationTo: groupUpdate.education ?? null,
       clearedCooldowns: !!clearCooldowns,
     },
@@ -646,6 +688,7 @@ export function randomProfile(teamId, rng = Math.random) {
     marriageId: null,
     gymMember: false,
     raffleTickets: 0,
+    charity: 0,
     once: {},
     cooldowns: {},
   };
@@ -655,11 +698,12 @@ export function randomProfile(teamId, rng = Math.random) {
 
 const signed = (n, unit = '') => `${n > 0 ? '+' : '−'}${unit}${Math.abs(n).toLocaleString('en-US')}`;
 
-export function formatDelta({ money = 0, food = 0, happiness = 0 } = {}) {
+export function formatDelta({ money = 0, food = 0, happiness = 0, charity = 0 } = {}) {
   const parts = [];
   if (money) parts.push(signed(money, '$'));
   if (food) parts.push(`${signed(food)} 🍎`);
   if (happiness) parts.push(`${signed(happiness)} 😄`);
+  if (charity) parts.push(`${signed(charity)} 💝`);
   return parts.join('  ·  ');
 }
 
@@ -708,7 +752,8 @@ export function reasonMessage(reason, detail = {}) {
     case 'pool_empty': return detail.count
       ? `Only ${detail.count} donated apple${detail.count === 1 ? ' is' : 's are'} left in the box.`
       : 'The donation box is empty.';
-    case 'not_vote_winner': return `The Final Will went to Group ${detail.winner} - only a team of that group can scan this.`;
+    case 'not_vote_winner': return `The Final Will went to Team ${detail.winner} - only that team can scan this.`;
+    case 'has_apples': return 'Only teams with no apples can be treated at the hospital.';
     case 'same_group': return 'Teams from the same group cannot marry each other.';
     case 'not_in_wedding': return `This wedding QR is for Team ${detail.a} and Team ${detail.b} - not your team.`;
     case 'already_married_together': return 'These two teams are already married to each other.';
@@ -742,7 +787,8 @@ export function describeStation(station, inputs) {
     if (c.type === 'notFlag' && c.flag === 'gymMember') req.push('Not for existing members');
     if (c.type === 'notMarried') req.push('Not for married groups');
     if (c.type === 'married') req.push('Married groups only');
-    if (c.type === 'voteWinner') req.push('Only the group that won the vote');
+    if (c.type === 'voteWinner') req.push('Only the team that won the vote');
+    if (c.type === 'noApples') req.push('Only teams with no apples');
     if (c.type === 'appleRoom') req.push(`Needs room for ${c.count} apple${c.count === 1 ? '' : 's'} (max ${APPLE_MAX})`);
   }
   if (e.pool && e.pool.delta < 0) req.push('Donation box must have enough apples');

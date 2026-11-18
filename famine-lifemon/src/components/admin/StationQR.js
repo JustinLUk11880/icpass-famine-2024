@@ -74,7 +74,7 @@ function PoolStatus({ poolKey }) {
 function VoteStatus() {
   const [voting] = useDocumentData(doc(db, 'voting', 'finalWill'));
   if (voting?.status === 'done') {
-    return <Alert severity="success">Vote winner: <strong>Group {voting.winner}</strong>. Only a team of that group can scan this QR (first scan takes it).</Alert>;
+    return <Alert severity="success">Vote winner: <strong>Team {voting.winner}</strong>. Only that team can scan this QR.</Alert>;
   }
   return <Alert severity="warning">No winner announced yet (Live events → The Final Will vote).</Alert>;
 }

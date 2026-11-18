@@ -9,7 +9,7 @@ import { useCollection, useDocumentData } from 'react-firebase-hooks/firestore';
 import { db } from '../../database/firebase';
 import { EDUCATION_LABELS, LIMITS, MAX_GROUPS, getStation } from '../../game/catalog.js';
 import {
-  GLOBAL_EVENTS, isValidTeamId, parentOf, poolCount, potOf, reasonMessage, summaryText,
+  GLOBAL_EVENTS, isValidTeamId, parentOf, poolCount, potOf, rafflePrizes, reasonMessage, summaryText,
 } from '../../game/engine.js';
 import {
   clampGroupCount, createGroups, handMarry, handUnmarry, performAdjust, resetGame, setGroupCount,
@@ -49,7 +49,7 @@ function activityLine(r) {
 
 function Adjust({ groupIds }) {
   const [gid, setGid] = useState('');
-  const [d, setD] = useState({ money: '', food: '', happiness: '', education: '' });
+  const [d, setD] = useState({ money: '', food: '', happiness: '', charity: '', education: '' });
   const [note, setNote] = useState('');
   const [clearCd, setClearCd] = useState(false);
   const [msg, setMsg] = useState(null);
@@ -64,13 +64,14 @@ function Adjust({ groupIds }) {
         money: Number(d.money) || 0,
         food: Number(d.food) || 0,
         happiness: Number(d.happiness) || 0,
+        charity: Number(d.charity) || 0,
         education: d.education === '' ? null : Number(d.education),
         clearCooldowns: clearCd,
       }, note);
       if (!res.ok) setMsg({ severity: 'error', text: reasonMessage(res.reason) });
       else {
         setMsg({ severity: 'success', text: `Team ${gid}: ${summaryText(res.summary)}` });
-        setD({ money: '', food: '', happiness: '', education: '' });
+        setD({ money: '', food: '', happiness: '', charity: '', education: '' });
         setNote('');
         setClearCd(false);
       }
@@ -81,7 +82,7 @@ function Adjust({ groupIds }) {
     }
   };
 
-  const nothing = !d.money && !d.food && !d.happiness && d.education === '' && !clearCd;
+  const nothing = !d.money && !d.food && !d.happiness && !d.charity && d.education === '' && !clearCd;
   return (
     <Paper variant="outlined" sx={{ p: 2 }}>
       <Typography fontWeight={800} sx={{ mb: 0.5 }}>Fix a mistake / award a prize</Typography>
@@ -96,6 +97,7 @@ function Adjust({ groupIds }) {
           <TextField size="small" type="number" label="± $" value={d.money} onChange={set('money')} />
           <TextField size="small" type="number" label="± 🍎" value={d.food} onChange={set('food')} />
           <TextField size="small" type="number" label="± 😄" value={d.happiness} onChange={set('happiness')} />
+          <TextField size="small" type="number" label="± 💝" value={d.charity} onChange={set('charity')} />
         </Stack>
         <TextField select size="small" label="Set degree (optional)" value={d.education} onChange={set('education')}>
           <MenuItem value="">No change</MenuItem>
@@ -195,9 +197,14 @@ function MarriageFix({ groups }) {
 }
 
 function Raffle({ groups }) {
+  const [mode, setMode] = useState('all');
   const [winners, setWinners] = useState(null);
+  const [paying, setPaying] = useState(false);
+  const [paid, setPaid] = useState(null);
   const entries = groups.filter((g) => g.raffleTickets > 0);
   const total = entries.reduce((s, g) => s + g.raffleTickets, 0);
+  const prizes = rafflePrizes(total, mode);
+  const money = (n) => `$${Number(n).toLocaleString('en-US')}`;
 
   // Weighted by tickets; the second prize excludes the first winner.
   const draw = () => {
@@ -214,29 +221,80 @@ function Raffle({ groups }) {
     };
     const first = pickFrom(entries);
     const rest = entries.filter((g) => g.id !== first.id);
-    setWinners({ first: first.id, second: rest.length ? pickFrom(rest).id : null });
+    const second = mode === 'split' && rest.length ? pickFrom(rest) : null;
+    // With no second winner, the first takes the whole pool.
+    setWinners({
+      list: [
+        { team: first.id, amount: second ? prizes.first : prizes.pool, note: 'Raffle 1st prize' },
+        ...(second ? [{ team: second.id, amount: prizes.second, note: 'Raffle 2nd prize' }] : []),
+      ],
+    });
+    setPaid(null);
+  };
+
+  // Each prize is one "Fix a mistake" adjustment, logged in the activity feed.
+  const pay = async () => {
+    setPaying(true);
+    const done = [];
+    try {
+      for (const w of winners.list) {
+        const r = await performAdjust(db, w.team, { money: w.amount }, w.note);
+        if (!r.ok) throw new Error(`Team ${w.team}: ${reasonMessage(r.reason)}`);
+        done.push(`Team ${w.team} +${money(w.amount)}`);
+      }
+      setPaid({ severity: 'success', text: `Paid: ${done.join(', ')}.` });
+    } catch (e) {
+      setPaid({
+        severity: 'error',
+        text: `${done.length ? `Paid ${done.join(', ')}; then ` : ''}payment failed: ${e?.message || e}. Check the activity log before paying again.`,
+      });
+    } finally {
+      setPaying(false);
+    }
   };
 
   return (
     <Paper variant="outlined" sx={{ p: 2 }}>
-      <Typography fontWeight={800} sx={{ mb: 0.5 }}>Raffle - {total} ticket{total === 1 ? '' : 's'}</Typography>
-      <Typography fontSize={13} color="text.secondary" sx={{ mb: 1 }}>Helpers only: groups never see each other's tickets.</Typography>
+      <Typography fontWeight={800} sx={{ mb: 0.5 }}>
+        Raffle - {total} ticket{total === 1 ? '' : 's'} · prize pool {money(prizes.pool)}
+      </Typography>
+      <Typography fontSize={13} color="text.secondary" sx={{ mb: 1 }}>
+        Helpers only: teams never see each other's tickets. The ticket money ($50 each) is the prize pool.
+      </Typography>
       {entries.length === 0 ? (
         <Typography fontSize={14}>No tickets sold yet.</Typography>
       ) : (
-        <>
-          <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 0.75, mb: 1.5 }}>
+        <Stack spacing={1.5}>
+          <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 0.75 }}>
             {entries.map((g) => (
               <Chip key={g.id} label={`Team ${g.id}: ${g.raffleTickets} (${Math.round((100 * g.raffleTickets) / total)}%)`} />
             ))}
           </Stack>
-          <Button variant="outlined" onClick={draw}>Draw 1st and 2nd prize</Button>
+          <TextField
+            select
+            size="small"
+            label="Prizes"
+            value={mode}
+            onChange={(e) => { setMode(e.target.value); setWinners(null); setPaid(null); }}
+          >
+            <MenuItem value="all">One winner takes the whole pool</MenuItem>
+            <MenuItem value="split">1st prize 70%, 2nd prize 30%</MenuItem>
+          </TextField>
+          <Button variant="outlined" onClick={draw} disabled={paying}>
+            {mode === 'split' ? 'Draw 1st and 2nd prize' : 'Draw the winner'}
+          </Button>
           {winners && (
-            <Alert severity="success" sx={{ mt: 1.5 }}>
-              🥇 Team {winners.first}{winners.second ? `  ·  🥈 Team ${winners.second}` : ''}. Award prizes with "Fix a mistake / award a prize".
+            <Alert severity="info">
+              {winners.list.map((w, i) => `${i === 0 ? '🥇' : '🥈'} Team ${w.team}: ${money(w.amount)}`).join('  ·  ')}
             </Alert>
           )}
-        </>
+          {winners && !paid && (
+            <Button variant="contained" color="success" disabled={paying} onClick={pay}>
+              {paying ? 'Paying...' : 'Pay the prizes'}
+            </Button>
+          )}
+          {paid && <Alert severity={paid.severity}>{paid.text}</Alert>}
+        </Stack>
       )}
     </Paper>
   );
@@ -368,13 +426,14 @@ export default function GroupsPanel() {
                 <TableCell align="right">$</TableCell>
                 <TableCell align="right">🍎</TableCell>
                 <TableCell align="right">😄</TableCell>
+                <TableCell align="right">💝</TableCell>
                 <TableCell>Degree</TableCell>
                 <TableCell>Status</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {groups.length === 0 && (
-                <TableRow><TableCell colSpan={6}>No teams yet.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={7}>No teams yet.</TableCell></TableRow>
               )}
               {groups.map((g) => (
                 <TableRow key={g.id}>
@@ -382,6 +441,7 @@ export default function GroupsPanel() {
                   <TableCell align="right">{Number(g.money || 0).toLocaleString('en-US')}</TableCell>
                   <TableCell align="right">{g.food ?? 0}</TableCell>
                   <TableCell align="right">{g.happiness ?? 0}</TableCell>
+                  <TableCell align="right">{g.charity ?? 0}</TableCell>
                   <TableCell>{EDUCATION_LABELS[g.education] ?? '?'}</TableCell>
                   <TableCell sx={{ fontSize: 12 }}>
                     {[g.married && '💍', g.gymMember && '🏋️', g.raffleTickets > 0 && `🎟${g.raffleTickets}`,

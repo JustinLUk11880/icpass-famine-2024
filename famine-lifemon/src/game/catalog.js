@@ -142,7 +142,7 @@ const custom = (id, stage, label, minEducation, notes) => ({
 
 // University jobs: win or lose, the work costs an apple. A loss is owed even
 // by a group that cannot cover it (it stops at 0).
-const uniJob = (id, label, win, notes) => game({
+const uniJob = (id, label, win, lose, notes) => game({
   id,
   stage: 'jobsUniversity',
   label,
@@ -150,23 +150,23 @@ const uniJob = (id, label, win, notes) => game({
   fields: [winLose],
   effect: (i) => (i.result === 'win'
     ? { money: win, food: -1 }
-    : { money: -50, food: -1, penalty: true }),
+    : { money: lose, food: -1, penalty: true }),
   notes,
 });
 
 export const STATIONS = [
   // College. Exam fees are paid whether or not the group passes.
   exam('college.primary', 'Primary exam', EDU.PRIMARY, { food: -1, happiness: -1 },
-    { notes: 'Kahoot, RSM 1.31. Pass: at least 60%. Sessions 15:10 and 15:55.' }),
+    { notes: 'Kahoot, RSM 1.31 (1.31A Justin). Pass: someone in the team places in the top 50% of the class. Sessions 15:00 and 15:50.' }),
   exam('college.secondary', 'Secondary exam', EDU.SECONDARY, { food: -2, happiness: -1 },
-    { notes: 'Kahoot, RSM 1.31. Pass: top 75% of the class. Sessions 15:25 and 16:10.' }),
+    { notes: 'Kahoot, RSM 1.31 (1.31A Justin). Pass: someone in the team places in the top 40% of the class. Sessions 15:15 and 16:05.' }),
   exam('college.ug', 'University exam', EDU.UG, { food: -2, happiness: -2 },
-    { notes: 'Kahoot, RSM 1.31. Pass: 15 or more out of 20. Sessions 15:40 and 16:25.' }),
+    { notes: 'Kahoot, RSM 1.31 (1.31A Justin). Pass: someone in the team places in the top 30% of the class. Sessions 15:30 and 16:20.' }),
   exam('college.phd', 'PhD (citation task)', EDU.PHD, { money: -250, food: -2, happiness: -2 }, {
     // Only the pass consumes one of the two event-wide PhD places.
     effect: (i) => (i.result === 'pass' ? { limit: { key: 'phd', max: 2 } } : {}),
     limitKey: 'phd',
-    notes: 'G.20. Underline 80% of the words within 5 mins. University degree needed. Max 2 groups ever. PhD groups may cut the line at every university job.',
+    notes: 'RSM 1.31 (1.31B Hayden). Citation task: find 80% of the word occurrences (±10) within 5 mins; no word-counter apps. University degree needed. Max 2 teams ever. PhD teams may cut the line at every university job.',
   }),
 
   // Jobs - Primary
@@ -185,7 +185,7 @@ export const STATIONS = [
       cooldown: { key: cooldownKeyFor('jobs.foodDelivery'), ms: 20 * MINUTE },
     }),
     cooldownMs: 20 * MINUTE,
-    notes: 'G.20. Play 左一拳右一拳 with the helper; a win delivers to LT2.28, LT1.47 or LT1.31. Pay on return with the photo. Max 4 deliverers out at once. One try every 20 mins.',
+    notes: 'G.20A Wilson. Play 左一拳右一拳 with the helper; a win delivers to LT2.28, LT1.47 or LT1.31. Pay on return with the photo. Only 2 teams out delivering at once. One try every 20 mins.',
   },
   game({
     id: 'jobs.warehouse',
@@ -193,12 +193,12 @@ export const STATIONS = [
     label: 'Warehouse packer',
     minEducation: EDU.PRIMARY,
     fields: [select('time', 'Mahjong tidied in', [
-      { value: 'under60', label: 'Under 60 seconds (+$75)' },
+      { value: 'under60', label: 'Under 60 seconds (+$70)' },
       { value: 'under90', label: '60 - 90 seconds (+$50)' },
       { value: 'over90', label: 'Over 90 seconds (nothing)' },
     ])],
-    effect: (i) => (i.time === 'over90' ? {} : { money: i.time === 'under60' ? 75 : 50, food: -1 }),
-    notes: 'G.20. Max 3 people, tidy within 90s. $50, plus $25 if within 60s.',
+    effect: (i) => (i.time === 'over90' ? {} : { money: i.time === 'under60' ? 70 : 50, food: -1 }),
+    notes: 'G.20B Edwin Chui. Max 3 people, tidy the mahjong within 90s. $50, plus $20 if within 60s.',
   }),
 
   // Jobs - Secondary
@@ -209,7 +209,7 @@ export const STATIONS = [
     minEducation: EDU.SECONDARY,
     fields: [number('smugglers', 'Smugglers caught this shift', 0, 20, 0)],
     effect: (i) => ({ money: 150 + 100 * i.smugglers, food: -1, happiness: -1 }),
-    notes: 'G.20. 5-min shift: $150 per shift plus $100 per smuggler caught. Max 2 groups per shift (helper checks). Use "Police: stopped the robbery" for the $500.',
+    notes: 'G.20C Anthony. 5-min shift: $150 per shift plus $100 per smuggler caught. Max 2 teams per shift (helper checks). Use "Police: stopped the robbery" for the $500. Do not tell police about the robbery before the announcement.',
   }),
   {
     id: 'jobs.policeRobbery',
@@ -218,7 +218,7 @@ export const STATIONS = [
     minEducation: EDU.SECONDARY,
     fields: [],
     effect: () => ({ money: 500 }),
-    notes: 'Police group that tagged the robbers. No cooldown, so it can follow a shift QR.',
+    notes: 'For the police team that arrested the robbers before they solved the safe. No cooldown, so it can follow a shift QR.',
   },
   game({
     id: 'jobs.nurse',
@@ -227,7 +227,7 @@ export const STATIONS = [
     minEducation: EDU.SECONDARY,
     fields: [],
     effect: () => ({ money: 200, food: -1 }),
-    notes: 'Blind drawing, RSM 1.47, 2 people, about 5 mins.',
+    notes: 'Blind drawing, RSM 1.47 (1.47A Sammi), about 5 mins.',
   }),
   game({
     id: 'jobs.teacher',
@@ -236,31 +236,23 @@ export const STATIONS = [
     minEducation: EDU.SECONDARY,
     fields: [],
     effect: () => ({ money: 300, food: -1, happiness: -1, once: 'teacher' }),
-    notes: 'RSM 1.31, 1-2 people. 文言文 + English literature + maths questions. Once per group.',
+    notes: 'RSM 1.31 (1.31B Hayden). 文言文 + English literature + maths questions. Once per team.',
   }),
   game({
     id: 'jobs.artist',
     stage: 'jobsSecondary',
     label: 'Artist',
     minEducation: EDU.SECONDARY,
-    fields: [number('watchers', 'Other groups watching', 0, MAX_GROUPS * SUBGROUPS - 1, 0)],
-    effect: (i) => ({ money: 200 + 200 * i.watchers, food: -2, once: 'artist' }),
-    notes: 'Concert of at least 3 mins. $200 plus $200 per watching group (they do not pay). Once per group.',
+    fields: [number('watchers', 'Whole groups watching (can include your sister team)', 0, MAX_GROUPS, 0)],
+    effect: (i) => ({ money: 200 + 100 * i.watchers, food: -2, once: 'artist' }),
+    notes: 'RSM 2.28A Angela / Sannie. Concert or drama of at least 3 mins. $200 plus $100 per whole group watching (they do not pay; count carefully). Once per team.',
   }),
 
   // Jobs - University
-  uniJob('jobs.surgeon', 'Surgeon / doctor', 350, 'X-ray puzzle, RSM 1.47. Guess the item in the box within 1 min = win.'),
-  uniJob('jobs.banker', 'Banker', 350, 'RSM 1.47. 合24 / counting cards. Winner +$350, loser -$50.'),
-  uniJob('jobs.lawyer', 'Lawyer', 350, 'Guess the law, RSM 1.47. 10 questions, +10 right / -5 wrong. Winner +$350, loser -$50.'),
-  game({
-    id: 'jobs.engineer',
-    stage: 'jobsUniversity',
-    label: 'Engineer',
-    minEducation: EDU.UG,
-    fields: [winLose],
-    effect: (i) => (i.result === 'win' ? { money: 500, food: -1 } : { food: -1, penalty: true }),
-    notes: 'Win +$500. Win or lose, the work costs 1 apple.',
-  }),
+  uniJob('jobs.surgeon', 'Surgeon / doctor', 350, -50, 'X-ray puzzle, RSM 1.47 (1.47B Anastasia). Guess the item in the box within 1 min = win. Winner +$350, loser -$50.'),
+  uniJob('jobs.banker', 'Banker', 350, -50, 'RSM 1.47 (1.47C Brandon). 合24 / counting cards. Winner +$350, loser -$50.'),
+  uniJob('jobs.lawyer', 'Lawyer', 350, 50, 'Guess the law, RSM 1.47 (1.47D Stephanie). 10 questions, +10 right / -5 wrong. Winner +$350, loser +$50.'),
+  uniJob('jobs.engineer', 'Engineer', 350, 50, 'Bridge building, RSM 1.47 (1.47E Edwin Ko). Bridge must hold a book, 5 mins. Winner +$350, loser +$50.'),
 
   // Illegal. Drug and assassin need Primary ("Illegal bong (primary)").
   // Prisoner has no requirement: a robber may hold no degree at all.
@@ -271,7 +263,7 @@ export const STATIONS = [
     minEducation: EDU.PRIMARY,
     fields: [],
     effect: () => ({ money: 500, food: -1 }),
-    notes: 'RSM 2.28. Only when the bell comes back without the leader being tagged. Caught groups go to Prisoner instead.',
+    notes: 'RSM 2.28B Jianne. Only when the bell comes back without the leader being tagged. Caught teams go to Prisoner instead.',
   }),
   game({
     id: 'illegal.assassin',
@@ -280,8 +272,8 @@ export const STATIONS = [
     minEducation: EDU.PRIMARY,
     fields: [],
     limitKey: 'assassin',
-    effect: () => ({ money: 750, food: -1, limit: { key: 'assassin', max: 1 } }),
-    notes: 'Sticker on the selected committee member, plus a photo. Max 1 team ever.',
+    effect: () => ({ money: 600, food: -1, limit: { key: 'assassin', max: 1 } }),
+    notes: 'RSM 2.28C Kosto. Sticker on the target committee member (1 of 7) plus a clear photo/video. Max 1 team ever. Caught red-handed = prison.',
   }),
   {
     id: 'illegal.prisoner',
@@ -302,7 +294,7 @@ export const STATIONS = [
       happiness: -2,
       penalty: true,
     }),
-    notes: 'RSM G.20, after 5 mins in prison. Everyone loses 2 happiness. A penalty: no cooldown, and it applies even if they cannot pay (stops at $0).',
+    notes: 'G.20C Anthony, after 5 mins in prison. Everyone loses 2 happiness. A penalty: no cooldown, and it applies even if they cannot pay (stops at $0).',
   },
 
   // Secret tasks. Pandemic and ICPASS Tax hit every group at once, so they
@@ -315,7 +307,7 @@ export const STATIONS = [
     fields: [],
     limitKey: 'finalWill',
     effect: () => ({ money: 1000, limit: { key: 'finalWill', max: 1 }, checks: [{ type: 'voteWinner' }] }),
-    notes: 'Starts 15:40. Run the vote in Live events → The Final Will vote. Once a winner is announced, only that group can scan this QR.',
+    notes: 'Kingson. Starts 15:40. Run the vote in Live events → The Final Will vote. Once a winner is announced, only that team can scan this QR.',
   },
   {
     id: 'secret.robbery',
@@ -324,7 +316,7 @@ export const STATIONS = [
     minEducation: EDU.NONE,
     fields: [],
     effect: () => ({ money: 2000, checks: [{ type: 'moneyBelow', value: 500 }] }),
-    notes: 'Starts 16:15 - send the "Robbery started" announcement. Only teams under $500 may attempt. Caught teams go to Prisoner instead.',
+    notes: 'Starts 16:15, RSM 1.31C / 2.28B. Send the "Robbery started" announcement when they shout 打劫! Only teams under $500 may attempt. Caught teams go to Prisoner; the police team gets "Police: stopped the robbery".',
   },
 
   // Entertainment: no cooldown.
@@ -333,10 +325,11 @@ export const STATIONS = [
     stage: 'entertainment',
     label: 'Casino',
     minEducation: EDU.NONE,
-    fields: [number('amount', 'Won (+) or lost (-) in $', -5000, 5000, null, { required: true, nonZero: true })],
-    // Entertainment always raises happiness by 2, win or lose.
-    effect: (i) => ({ money: i.amount, happiness: 2, penalty: true }),
-    notes: 'RSM 2.28. Poker and 21. +2 happiness win or lose. Check they can cover the bet before they play.',
+    fields: [],
+    // Played for chips, not money: a fixed entry fee and a fixed reward.
+    // Every entertainment station gives +2 happiness (organiser's rule).
+    effect: () => ({ money: -100, food: -1, happiness: 2 }),
+    notes: 'RSM 2.28D Isaac. Poker and blackjack for chips, not money. Entry $100; +2 happiness whatever the chips.',
   },
   {
     id: 'ent.raffle',
@@ -345,7 +338,7 @@ export const STATIONS = [
     minEducation: EDU.NONE,
     fields: [number('tickets', 'Tickets bought', 1, 100, 1)],
     effect: (i) => ({ money: -50 * i.tickets, happiness: 2, raffle: i.tickets }),
-    notes: '$50 per ticket, +2 happiness. Wheel spins at the end (1st and 2nd prize). Other groups never see how many tickets you hold.',
+    notes: 'RSM 2.28E Toby. $50 per ticket, +2 happiness. Wheel spins at the end (Groups tab → Raffle); the ticket money is the prize pool. Other teams never see how many tickets you hold.',
   },
   {
     id: 'ent.sauna',
@@ -353,8 +346,17 @@ export const STATIONS = [
     label: 'Sauna / spa',
     minEducation: EDU.NONE,
     fields: [],
-    effect: () => ({ money: -100, happiness: 2 }),
-    notes: 'Doomscrolling and doing your own stuff.',
+    effect: () => ({ money: -150, happiness: 2 }),
+    notes: 'RSM 2.28E Toby. Doomscrolling or just chill for 5 mins.',
+  },
+  {
+    id: 'ent.karaoke',
+    stage: 'entertainment',
+    label: 'Karaoke',
+    minEducation: EDU.NONE,
+    fields: [],
+    effect: () => ({ money: -100, food: -1, happiness: 2 }),
+    notes: 'RSM 2.28A Angela / Sannie. Sing as you want. +2 happiness.',
   },
 
   // Supermarket (RSM 2.28): shopping, not a game, so no cooldown.
@@ -371,7 +373,7 @@ export const STATIONS = [
       number('apples', 'Apples bought', 1, APPLE_MAX, 1),
     ],
     effect: (i) => ({ money: -i.price * i.apples, food: i.apples, checks: [{ type: 'appleRoom', count: i.apples }] }),
-    notes: 'Change the price at least every 15 minutes. Refused if the group cannot hold that many apples (max 8), so nobody pays for apples they cannot keep.',
+    notes: 'RSM 2.28F Andy. Change the price at least every 15 minutes. Refused if the group cannot hold that many apples (max 8), so nobody pays for apples they cannot keep.',
   },
   {
     id: 'shop.donate',
@@ -381,8 +383,8 @@ export const STATIONS = [
     minEducation: EDU.NONE,
     fields: [number('apples', 'Apples donated', 1, APPLE_MAX, 1)],
     poolKey: 'apples',
-    effect: (i) => ({ food: -i.apples, happiness: 2, pool: { key: 'apples', delta: i.apples } }),
-    notes: 'Donating makes the team happier: +2 happiness. Apples go into the shared donation box.',
+    effect: (i) => ({ food: -i.apples, happiness: 2, charity: i.apples, pool: { key: 'apples', delta: i.apples } }),
+    notes: 'RSM 2.28F Andy. Donating: +2 happiness and +1 charity per apple. Apples go into the shared donation box.',
   },
   {
     id: 'shop.receive',
@@ -408,7 +410,7 @@ export const STATIONS = [
     minEducation: EDU.NONE,
     fields: [],
     effect: () => ({ money: -350, setFlag: 'gymMember', checks: [{ type: 'notFlag', flag: 'gymMember' }] }),
-    notes: 'One-off. Needed before any gym challenge.',
+    notes: 'G.20D Edmund. One-off. Needed before any gym challenge.',
   },
   game({
     id: 'com.gymChallenge',
@@ -417,7 +419,7 @@ export const STATIONS = [
     minEducation: EDU.NONE,
     fields: [number('sets', 'Sets completed (20 push-ups or a 60s plank each)', 1, APPLE_MAX, 1)],
     effect: (i) => ({ food: i.sets, checks: [{ type: 'flag', flag: 'gymMember' }] }),
-    notes: '+1 apple per set, within 5 mins. Members only.',
+    notes: 'G.20D Edmund. +1 apple per set, within 5 mins. Members only.',
   }),
   {
     id: 'com.foodWaste',
@@ -426,11 +428,21 @@ export const STATIONS = [
     minEducation: EDU.NONE,
     fields: [number('boxes', 'Food boxes brought back to G.20', 1, 4, 1)],
     effect: (i) => ({ money: 10 * i.boxes }),
-    notes: '$10 per leftover food box, with a photo as proof. A group may not bring back the food it just delivered.',
+    notes: 'G.20A Wilson. $10 per leftover food box, with a photo as proof. A team may not bring back the food it just delivered.',
   },
   custom('com.bowling', 'community', 'Recycling: bottle bowling', EDU.NONE,
-    'Reward not set in the rules document - enter it (community games raise happiness or apples).'),
-  custom('com.hospital', 'community', 'Hospital', EDU.NONE),
+    'G.20B Edwin Chui. Reward not set in the rules documents - enter it (community games raise happiness or apples).'),
+  {
+    id: 'com.hospital',
+    stage: 'community',
+    label: 'Hospital (treatment)',
+    minEducation: EDU.NONE,
+    fields: [],
+    // Charged even to a team that cannot pay (stops at $0): a starving team
+    // with no money must still be treatable.
+    effect: () => ({ money: -250, food: 3, penalty: true, checks: [{ type: 'noApples' }] }),
+    notes: 'RSM 1.31C. Only for teams with no apples (not because of a technical issue - use "Fix a mistake" for that). Sit 5 mins: +3 apples, -$250 (stops at $0).',
+  },
 
   // Wedding: "Marry (actually bank)", RSM 1.31.
   {

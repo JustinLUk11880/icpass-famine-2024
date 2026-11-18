@@ -6,17 +6,17 @@ import { doc } from 'firebase/firestore';
 import { useDocumentData } from 'react-firebase-hooks/firestore';
 
 import { db } from '../database/firebase';
-import { parentOf } from '../game/engine.js';
+import { canVoteFor, parentOf, teamsOf } from '../game/engine.js';
 import { castVote, clampGroupCount } from '../game/firestore.js';
 
-// The Final Will: while the helper has voting open, every group votes for
-// the team that deserves $1000 most (not itself). Anyone in the group can
-// cast or change the group's single vote until voting closes.
-// Votes are per whole group: either team of a group casts the group's vote.
+// The Final Will: while the helper has voting open, every team votes for the
+// team it thinks deserves $1000 most - never itself and never its sister
+// team. Anyone in the team can cast or change the team's single vote until
+// voting closes.
 export default function FinalWillVote({ groupId }) {
-  const gid = String(parentOf(groupId));
+  const team = String(groupId);
   const [voting] = useDocumentData(doc(db, 'voting', 'finalWill'));
-  const [myVote] = useDocumentData(doc(db, 'votes', gid));
+  const [myVote] = useDocumentData(doc(db, 'votes', team));
   const [config] = useDocumentData(doc(db, 'config', 'game'));
   const [choice, setChoice] = useState('');
   const [busy, setBusy] = useState(false);
@@ -33,14 +33,13 @@ export default function FinalWillVote({ groupId }) {
   );
 
   if (status === 'done') {
-    const won = String(voting.winner) === gid;
+    const won = String(voting.winner) === team;
     return box(won ? (
       <Typography fontWeight={700}>
-        🎉 Your group won $1000! Send someone from either team to <strong>{voting.room || 'the helper'}</strong> to scan the QR there.
-        The $1000 goes to the team that scans, and counts for the whole group.
+        🎉 Your team won $1000! Go to <strong>{voting.room || 'the helper'}</strong> and scan the QR there to collect it.
       </Typography>
     ) : (
-      <Typography>The Final Will went to Group {voting.winner}.</Typography>
+      <Typography>The Final Will went to Team {voting.winner}.</Typography>
     ));
   }
 
@@ -49,14 +48,14 @@ export default function FinalWillVote({ groupId }) {
   }
 
   const count = clampGroupCount(config?.groupCount);
-  const others = Array.from({ length: count }, (_, i) => i + 1).filter((n) => String(n) !== gid);
+  const options = Array.from({ length: count }, (_, i) => teamsOf(i + 1)).flat().filter((t) => canVoteFor(team, t));
   const current = myVote?.for;
 
   const vote = async () => {
     setBusy(true);
     setError(null);
     try {
-      await castVote(db, gid, Number(choice));
+      await castVote(db, team, choice);
       setChoice('');
     } catch (e) {
       console.error('Vote failed', e);
@@ -69,11 +68,11 @@ export default function FinalWillVote({ groupId }) {
   return box(
     <Stack spacing={1.25}>
       <Typography fontSize={14}>
-        Vote for the group you think deserves the $1000 most. You cannot vote for your own group.
-        One vote per group - anyone in your group (either team) can change it until voting closes.
+        Vote for the team you think deserves the $1000 most. You cannot vote for your own team or your
+        sister team (Group {parentOf(team)}). One vote per team - anyone in your team can change it until voting closes.
       </Typography>
       {current != null && (
-        <Typography fontWeight={800}>Your group is voting for Group {current}.</Typography>
+        <Typography fontWeight={800}>Your team is voting for Team {current}.</Typography>
       )}
       <Box sx={{ display: 'flex', gap: 1, bgcolor: '#fff', borderRadius: 1, p: 1 }}>
         <TextField
@@ -84,7 +83,7 @@ export default function FinalWillVote({ groupId }) {
           value={choice}
           onChange={(e) => setChoice(e.target.value)}
         >
-          {others.map((n) => <MenuItem key={n} value={n}>Group {n}</MenuItem>)}
+          {options.map((t) => <MenuItem key={t} value={t}>Team {t}</MenuItem>)}
         </TextField>
         <Button variant="contained" disabled={!choice || busy} onClick={vote}>
           {busy ? '...' : 'Vote'}

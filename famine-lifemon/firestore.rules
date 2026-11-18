@@ -16,11 +16,6 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Groups 1 to 20, spelled exactly: no "03", no " 3".
-    function validGroupId(id) {
-      return id.matches('^([1-9]|1[0-9]|20)$');
-    }
-
     // Teams (sub-groups) 1.1 to 20.2: every group document is a team.
     function validTeamId(id) {
       return id.matches('^([1-9]|1[0-9]|20)[.][12]$');
@@ -30,7 +25,8 @@ service cloud.firestore {
       return d.money is number     && d.money >= 0     && d.money <= 100000000
           && d.food is number      && d.food >= 0      && d.food <= 8
           && d.happiness is number && d.happiness >= 0 && d.happiness <= 1000000
-          && d.education is number && d.education >= 0 && d.education <= 4;
+          && d.education is number && d.education >= 0 && d.education <= 4
+          && (!('charity' in d) || (d.charity is number && d.charity >= 0));
     }
 
     // One shared account per team; everyone in the team writes to it.
@@ -88,17 +84,16 @@ service cloud.firestore {
       allow delete: if signedIn();
     }
 
-    // One vote per group, changeable only while voting is open, never for
-    // your own group.
-    match /votes/{groupId} {
+    // One vote per team, changeable only while voting is open, for a team
+    // of another group: never itself and never its sister team.
+    match /votes/{teamId} {
       allow read: if signedIn();
       allow create, update: if signedIn()
-                            && validGroupId(groupId)
-                            && request.resource.data.voter == groupId
-                            && request.resource.data['for'] is int
-                            && request.resource.data['for'] >= 1
-                            && request.resource.data['for'] <= 20
-                            && request.resource.data['for'] != int(groupId)
+                            && validTeamId(teamId)
+                            && request.resource.data.voter == teamId
+                            && request.resource.data['for'] is string
+                            && validTeamId(request.resource.data['for'])
+                            && request.resource.data['for'].split('[.]')[0] != teamId.split('[.]')[0]
                             && get(/databases/$(database)/documents/voting/finalWill).data.status == 'open';
       allow delete: if signedIn();
     }

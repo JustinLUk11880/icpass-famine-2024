@@ -95,6 +95,13 @@ export default function Stats({ snapshot, loading, groupId, marriage }) {
 						</Typography>,
 					)}
 				</Row>
+				<Row label="Charity">
+					{value(
+						<Typography sx={{ fontSize: 15, fontWeight: 700, color: '#111A2D' }}>
+							💝 × {Math.max(0, Math.floor(Number(g.charity) || 0))}
+						</Typography>,
+					)}
+				</Row>
 			</Paper>
 
 			<Paper elevation={6} sx={{ background: 'linear-gradient(45deg, #4FB2AA 10%, #3F8F89 100%)', px: 2, py: 1.5, color: '#fff' }}>

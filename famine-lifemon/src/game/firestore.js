@@ -325,15 +325,18 @@ export async function openVoting(db) {
 
 export const closeVoting = (db) => setDoc(votingRef(db), { status: 'closed', closedAt: Date.now() }, { merge: true });
 
+// The winner is a team ("1.2"); only that team can scan the prize QR.
 export async function announceWinner(db, winner, room) {
-  const w = Number(winner);
+  const w = String(winner);
   const where = String(room || '').trim();
   await setDoc(votingRef(db), { status: 'done', winner: w, room: where, announcedAt: Date.now() }, { merge: true });
-  await broadcast(db, `🗳 The Final Will goes to Group ${w}! Group ${w}: send someone to ${where || 'the helper'} to scan the QR for your $1000.`, 'alert');
+  await broadcast(db, `🗳 The Final Will goes to Team ${w}! Team ${w}: send someone to ${where || 'the helper'} to scan the QR for your $1000.`, 'alert');
 }
 
-export const castVote = (db, voter, forGroup) =>
-  setDoc(doc(db, 'votes', String(voter)), { voter: String(voter), for: Number(forGroup), at: Date.now() });
+// One vote per team, for a team of another group (never itself or its
+// sister team). The rules enforce the same.
+export const castVote = (db, voterTeam, forTeam) =>
+  setDoc(doc(db, 'votes', String(voterTeam)), { voter: String(voterTeam), for: String(forTeam), at: Date.now() });
 
 // ----------------------------------------------------------------- config ---
 

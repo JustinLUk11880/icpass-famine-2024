@@ -35,7 +35,8 @@
     "test": "react-scripts test",
     "eject": "react-scripts eject",
     "test:game": "node --no-warnings --test tests/engine.test.mjs",
-    "test:live": "node --no-warnings --test --test-timeout=600000 tests/live.firestore.mjs"
+    "test:live": "node --no-warnings --test --test-timeout=600000 tests/live.firestore.mjs",
+    "test:browser": "node --no-warnings tests/e2e.browser.mjs"
   },
   "eslintConfig": {
     "extends": [
@@ -56,6 +57,10 @@
     ]
   },
   "devDependencies": {
-    "cross-env": "^7.0.3"
+    "cross-env": "^7.0.3",
+    "jsqr": "^1.4.0",
+    "pngjs": "^7.0.0",
+    "puppeteer-core": "^23.11.1",
+    "qrcode": "^1.5.4"
   }
 }

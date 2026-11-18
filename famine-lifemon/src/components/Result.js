@@ -6,13 +6,20 @@ import { useCollection } from 'react-firebase-hooks/firestore';
 
 import { db } from '../database/firebase';
 import { APPLE_MAX, SUBGROUPS } from '../game/catalog.js';
-import { groupTotals, parentOf } from '../game/engine.js';
+import { OVERALL_WEIGHTS, groupTotals, overallScores, parentOf } from '../game/engine.js';
 
 const medals = { 1: '🥇', 2: '🥈', 3: '🥉' };
 
 // The three awards from the LifeMon rules. Each is ranked on its own stat;
 // there is no combined score.
+const pct = (w) => `${Math.round(w * 100)}%`;
 export const AWARDS = [
+  {
+    key: 'overall10',
+    title: 'Overall',
+    subtitle: `😄${pct(OVERALL_WEIGHTS.happiness)} 💰${pct(OVERALL_WEIGHTS.money)} 🍎${pct(OVERALL_WEIGHTS.food)} 💝${pct(OVERALL_WEIGHTS.charity)}`,
+    icon: '🏆',
+  },
   { key: 'money', title: 'Monopoly', subtitle: 'most money', icon: '💰' },
   { key: 'happiness', title: 'Joy Master', subtitle: 'most happiness', icon: '😄' },
   { key: 'food', title: 'Wellness King/Queen', subtitle: 'most health', icon: '🍎' },
@@ -40,13 +47,15 @@ export function rankBy(groups, key) {
 export default function Result({ highlightGroup }) {
   // Live: every scan by any group updates every phone showing this board.
   const [snap, loading, error] = useCollection(collection(db, 'groups'));
-  const [awardKey, setAwardKey] = useState('money');
+  const [awardKey, setAwardKey] = useState('overall10');
   const award = AWARDS.find((a) => a.key === awardKey) || AWARDS[0];
 
   // A group's score is the sum of its teams (1.1 + 1.2). Only groups with at
   // least one joined team are listed. Raffle tickets are deliberately absent:
   // groups must not learn how many tickets the others hold.
-  const groups = groupTotals((snap?.docs || []).map((d) => ({ id: d.id, data: d.data() })));
+  // overall10 is the 0-100 weighted score x10, an integer for ranking.
+  const groups = overallScores(groupTotals((snap?.docs || []).map((d) => ({ id: d.id, data: d.data() }))))
+    .map((g) => ({ ...g, overall10: Math.round(g.overall * 10) }));
 
   const myGroup = highlightGroup != null ? parentOf(highlightGroup) : null;
   const isMine = (id) => myGroup != null && Number(id) === myGroup;
@@ -102,9 +111,11 @@ export default function Result({ highlightGroup }) {
         </Typography>
       ),
     },
+    statColumn('overall10', '🏆 Score', (v) => (Number(v) / 10).toFixed(1)),
     statColumn('money', '💰 Money', (v) => `$${Number(v).toLocaleString('en-US')}`),
     statColumn('happiness', '😄 Joy', (v) => `😄 × ${v}`),
     statColumn('food', '🍎 Health', (v) => `${v}/${APPLE_MAX * SUBGROUPS}`),
+    statColumn('charity', '💝 Charity', (v) => v),
   ];
 
   return (
@@ -139,7 +150,17 @@ export default function Result({ highlightGroup }) {
         size="small"
         value={award.key}
         onChange={(_, v) => v && setAwardKey(v)}
-        sx={{ mb: 1 }}
+        // Four awards do not fit in one row on a phone: two rows of two.
+        sx={{
+          mb: 1,
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          '& .MuiToggleButtonGroup-grouped': {
+            border: '1px solid rgba(0,0,0,0.12) !important',
+            borderRadius: '6px !important',
+            m: '2px',
+          },
+        }}
       >
         {AWARDS.map((a) => (
           <ToggleButton key={a.key} value={a.key} sx={{ textTransform: 'none', lineHeight: 1.2, py: 0.75 }}>

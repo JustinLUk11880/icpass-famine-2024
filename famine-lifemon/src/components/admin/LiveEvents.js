@@ -45,8 +45,8 @@ function FinalWillPanel() {
           The Final Will vote <Typography component="span" color="text.secondary" fontSize={14}>· 15:40 · status: {status}</Typography>
         </Typography>
         <Typography fontSize={14} sx={{ mt: 0.5 }}>
-          Opening the vote puts a voting card on every passport. Each group gets one vote (changeable while open) and
-          cannot vote for itself. Announcing the winner tells every phone which room to go to, and from then on only
+          Opening the vote puts a voting card on every passport. Each team gets one vote (changeable while open) and
+          cannot vote for itself or its sister team. Announcing the winner tells every phone which room to go to, and from then on only
           the winner can scan the Final Will QR.
         </Typography>
         <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 1, mt: 1.5 }}>
@@ -60,20 +60,20 @@ function FinalWillPanel() {
         </Stack>
 
         <Typography fontWeight={700} fontSize={14} sx={{ mt: 2 }}>
-          {votes.length} group{votes.length === 1 ? '' : 's'} voted{votes.length ? ` (${votes.map((v) => v.voter).sort((a, b) => a - b).join(', ')})` : ''}
+          {votes.length} team{votes.length === 1 ? '' : 's'} voted{votes.length ? ` (${votes.map((v) => v.voter).sort((a, b) => parseFloat(a) - parseFloat(b)).join(', ')})` : ''}
         </Typography>
         {rows.length > 0 && (
           <Box component="ul" sx={{ fontFamily: 'Roboto, Helvetica, Arial, sans-serif', fontSize: 14, m: 0, pl: 2.5 }}>
-            {rows.map((r) => <li key={r.group}>Group {r.group}: {r.count} vote{r.count === 1 ? '' : 's'}</li>)}
+            {rows.map((r) => <li key={r.team}>Team {r.team}: {r.count} vote{r.count === 1 ? '' : 's'}</li>)}
           </Box>
         )}
         {leaders.length > 1 && (
-          <Alert severity="warning" sx={{ mt: 1 }}>Tie between groups {leaders.join(', ')} - pick the winner below (e.g. spin a wheel).</Alert>
+          <Alert severity="warning" sx={{ mt: 1 }}>Tie between teams {leaders.join(', ')} - pick the winner below (e.g. spin a wheel).</Alert>
         )}
 
         <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
           <TextField select size="small" label="Winner" value={pick} onChange={(e) => setWinner(e.target.value)} sx={{ minWidth: 130 }}>
-            {(rows.length ? rows.map((r) => r.group) : []).map((g) => <MenuItem key={g} value={String(g)}>Group {g}</MenuItem>)}
+            {rows.map((r) => <MenuItem key={r.team} value={r.team}>Team {r.team}</MenuItem>)}
           </TextField>
           <TextField size="small" fullWidth label="Room to collect the prize" placeholder="e.g. RSM 1.31" value={room} onChange={(e) => setRoom(e.target.value)} />
         </Stack>
@@ -88,7 +88,7 @@ function FinalWillPanel() {
         </Button>
         {status === 'open' && <Typography fontSize={12} color="text.secondary" sx={{ mt: 0.5 }}>Close voting before announcing.</Typography>}
         {status === 'done' && (
-          <Alert severity="success" sx={{ mt: 1.5 }}>Announced: Group {voting.winner} → {voting.room}. Make the Final Will QR there.</Alert>
+          <Alert severity="success" sx={{ mt: 1.5 }}>Announced: Team {voting.winner} → {voting.room}. Make the Final Will QR there.</Alert>
         )}
         {error && <Alert severity="error" sx={{ mt: 1.5 }}>{error}</Alert>}
       </CardContent>

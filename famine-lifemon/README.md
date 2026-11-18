@@ -28,6 +28,7 @@ In the Firebase console, enable **Authentication → Sign-in method → Anonymou
 | `npm run build` | Production build into `build/` |
 | `npm run test:game` | Rules-engine tests: every number in the rules document, plus a 200k-scan fuzz. Safe, offline. |
 | `npm run test:live` | Tests against the real Firestore project: concurrency, limits, rules, load. **Resets the game - never run during an event.** |
+| `npm run test:browser` | Drives the helper page and phones in Chrome, scanning real QR codes through a fake camera. `E2E_BASE=https://famine-ace23.web.app` tests the live site. **Resets the game.** |
 | `firebase deploy --only hosting,firestore:rules` | Publish the site and the security rules |
 
 ## Running the event
@@ -55,11 +56,12 @@ robbery starts), and apply *Pandemic Pass-26* or the *ICPASS Tax* to every
 group. Each group is hit once even if the button is pressed twice.
 
 - **The Final Will (15:40):** *Open voting* puts a voting card on every
-  passport. Each group has one vote (any member can change it until voting
-  closes) and cannot vote for itself. *Close voting*, check the tally (ties are
-  flagged - break them with a wheel), type the room and press *Announce
-  winner*: every phone shows the winner and the room. From then on only the
-  winning group can scan the Final Will QR, so make it in that room.
+  passport. Each team has one vote (any member can change it until voting
+  closes) and cannot vote for itself or its sister team. *Close voting*, check
+  the tally (ties are flagged - break them with a wheel), type the room and
+  press *Announce winner*: every phone shows the winning team and the room.
+  From then on only the winning team can scan the Final Will QR, so make it in
+  that room.
 - **Pay out marriages (end of LifeMon):** every married couple gets pot x 2
   and +10 apples each. Pays each marriage once.
 
@@ -98,9 +100,16 @@ comment at the top of `catalog.js`).
   *Police: stopped the robbery* (+$500).
 - **Teams:** every station rule (cooldowns, once-only, limits, robbery under
   $500, marriages, Pandemic and Tax) applies per team. Teams of the same group
-  cannot marry each other. The Final Will vote is one vote per group; either
-  team of the winning group can scan the prize QR (the first scan takes it).
-- **Entertainment** (casino, raffle, sauna): +2 happiness each time.
+  cannot marry each other. The Final Will vote is one vote per team, never
+  for your own or your sister team; only the winning team can scan the prize.
+- **Entertainment** (casino, karaoke, sauna, raffle): +2 happiness each time
+  (organiser's rule, overriding the documents' +1). Casino is played for chips:
+  a fixed $100 entry and 1 apple. Karaoke $100 and 1 apple. Sauna $150.
+- **Raffle:** $50 a ticket. The ticket money is the prize pool: on the Groups
+  tab draw one winner who takes the pool, or 1st 70% / 2nd 30%, then press
+  *Pay the prizes*.
+- **Hospital:** teams with no apples only. +3 apples, -$250 (stops at $0).
+- **Charity:** +1 per apple donated. Shown on the passport and leaderboard.
 - **Supermarket (no cooldowns):** buy apples at the helper's current price
   ($50-$200), refused if the team cannot hold them; donate apples into a
   shared box (+2 happiness); receive from the box only if the team has under
@@ -110,11 +119,13 @@ comment at the top of `catalog.js`).
   then deposits $100-$500 into the shared pot, secretly, every 30 minutes.
   Divorce: the group that scans gets pot x 1.5, -3 happiness, -10 apples; the
   other group gets +3 happiness, +10 apples. At the end, *Pay out marriages*.
-- **Stations the documents leave blank** (bottle bowling, hospital): the helper
-  enters the amounts on the day.
-- **Awards:** the leaderboard ranks Monopoly (money), Joy Master (happiness)
-  and Wellness King/Queen (apples) separately. Raffle tickets are never shown
-  to other groups.
+- **Stations the documents leave blank** (bottle bowling): the helper enters
+  the amounts on the day.
+- **Awards:** the leaderboard's *Overall* tab ranks the weighted winner - 40%
+  happiness, 20% money, 30% apples, 10% charity, each scaled to the best
+  group in that stat (so the leader in everything scores 100). Monopoly
+  (money), Joy Master (happiness) and Wellness King/Queen (apples) are ranked
+  separately. Raffle tickets are never shown to other groups.
 
 ## Phones stay up to date without reloading
 

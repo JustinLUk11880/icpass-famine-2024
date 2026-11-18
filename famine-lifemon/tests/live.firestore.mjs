@@ -73,7 +73,7 @@ test('one QR, many groups: each group redeems it once', async () => {
   assert.ok(first.every(ok));
   const again = await Promise.all([3, 4, 5, 6, 7].map((g) => scan(g, payload)));
   assert.ok(again.every(reason('already_scanned')));
-  for (const g of [3, 4, 5, 6, 7]) assert.equal((await read(g)).money, 400);
+  for (const g of [3, 4, 5, 6, 7]) assert.equal((await read(g)).money, 350, 'sauna costs $150');
 });
 
 test('assassin: 5 groups at once, exactly 1 gets the job', async () => {
@@ -289,31 +289,38 @@ test('marriage bank: deposits, 8 phones on one deposit QR, payout pressed twice'
   assert.equal((await scan(2, qr('wed.deposit', { amount: 100 }))).reason, 'marriage_over');
 });
 
-test('final will vote: rules enforce one valid vote per group; only the winner scans', async () => {
+test('final will vote: one vote per team, never for itself or its sister team; only the winner team scans', async () => {
   await resetGame(db);
-  await Promise.all([1, 2, 3, 4].map((g) => put(g, { money: 0 })));
+  await Promise.all(['1.1', '1.2', '2.1', '3.1', '3.2', '4.1'].map((t) => put(t, { money: 0 })));
   const denied = async (p) => {
     try { await p; return false; } catch (e) { return e.code === 'permission-denied'; }
   };
-  assert.ok(await denied(castVote(db, 1, 2)), 'voting before it opens');
+  assert.ok(await denied(castVote(db, '1.1', '2.1')), 'voting before it opens');
   await openVoting(db);
-  assert.ok(await denied(castVote(db, 1, 1)), 'voting for yourself');
-  assert.ok(await denied(castVote(db, 1, 21)), 'voting for group 21');
-  assert.ok(await denied(setDoc(doc(db, 'votes', '1'), { voter: '2', for: 3, at: 0 })), 'voting as another group');
-  await Promise.all([castVote(db, 1, 3), castVote(db, 2, 3), castVote(db, 3, 1), castVote(db, 4, 1)]);
-  await castVote(db, 4, 3); // change of mind
+  assert.ok(await denied(castVote(db, '1.1', '1.1')), 'voting for yourself');
+  assert.ok(await denied(castVote(db, '1.1', '1.2')), 'voting for your sister team');
+  assert.ok(await denied(castVote(db, '1.1', '21.1')), 'voting for team 21.1');
+  assert.ok(await denied(castVote(db, '1', '2.1')), 'an old whole-group voter id');
+  assert.ok(await denied(setDoc(doc(db, 'votes', '1.1'), { voter: '2.1', for: '3.1', at: 0 })), 'voting as another team');
+  assert.ok(await denied(setDoc(doc(db, 'votes', '1.1'), { voter: '1.1', for: 3, at: 0 })), 'a number instead of a team id');
+  // every team votes at once, sister teams included
+  await Promise.all([
+    castVote(db, '1.1', '3.2'), castVote(db, '1.2', '3.2'), castVote(db, '2.1', '3.2'),
+    castVote(db, '3.1', '1.1'), castVote(db, '3.2', '1.1'), castVote(db, '4.1', '1.1'),
+  ]);
+  await castVote(db, '4.1', '3.2'); // change of mind
   const votes = (await getDocs(collection(db, 'votes'))).docs.map((d) => d.data());
-  assert.equal(votes.length, 4);
-  assert.equal(votes.filter((v) => v.for === 3).length, 3);
+  assert.equal(votes.length, 6, 'one vote per team');
+  assert.equal(votes.filter((v) => v.for === '3.2').length, 4);
   await closeVoting(db);
-  assert.ok(await denied(castVote(db, 3, 2)), 'voting after it closes');
-  await announceWinner(db, 3, 'RSM 1.31');
+  assert.ok(await denied(castVote(db, '2.1', '4.1')), 'voting after it closes');
+  await announceWinner(db, '3.2', 'RSM 1.31');
   const ann = (await getDoc(doc(db, 'announcements', 'current'))).data();
-  assert.ok(ann.message.includes('Group 3') && ann.message.includes('RSM 1.31'));
+  assert.ok(ann.message.includes('Team 3.2') && ann.message.includes('RSM 1.31'));
   const fw = qr('secret.finalWill');
-  assert.equal((await scan(2, fw)).reason, 'not_vote_winner');
-  assert.equal((await scan(3, fw)).ok, true);
-  assert.equal((await read(3)).money, 1000);
+  assert.equal((await scan('3.1', fw)).reason, 'not_vote_winner', 'not even the sister team');
+  assert.equal((await scan('3.2', fw)).ok, true);
+  assert.equal((await read('3.2')).money, 1000);
   // re-opening clears the old votes
   await openVoting(db);
   assert.equal((await getDocs(collection(db, 'votes'))).size, 0);
@@ -333,7 +340,7 @@ test('teams: both teams of a group join at once, play separately, cannot marry e
   await put('5.1', { money: 500 });
   await put('5.2', { money: 500 });
   assert.equal((await scan('5.1', qr('ent.sauna'))).ok, true);
-  assert.deepEqual([(await read('5.1')).money, (await read('5.2')).money], [400, 500]);
+  assert.deepEqual([(await read('5.1')).money, (await read('5.2')).money], [350, 500]);
   // sister teams cannot marry; other groups' teams can
   assert.equal((await scan('5.1', qr('wed.wedding', { teamA: '5.1', teamB: '5.2' }))).reason, 'same_group');
   await put('6.2', { married: false });
@@ -366,8 +373,8 @@ test('the last apple: 10 simultaneous apple-costing scans, 2 apples, exactly 2 s
 
 test('apples never exceed 8, even with simultaneous apple gains', async () => {
   await put(6, { food: 6 });
-  // Hospital (helper-entered amounts) has no cooldown, so all six apply.
-  const results = await Promise.all(Array.from({ length: 6 }, () => scan(6, qr('com.hospital', { food: 1 }))));
+  // Bottle bowling (helper-entered amounts) has no cooldown, so all six apply.
+  const results = await Promise.all(Array.from({ length: 6 }, () => scan(6, qr('com.bowling', { food: 1 }))));
   assert.ok(results.every(ok), JSON.stringify(results.map((r) => r.reason)));
   assert.equal((await read(6)).food, APPLE_MAX);
   // and a gym challenge, which has a 15-minute cooldown, applies once
@@ -437,6 +444,7 @@ test('every station resolves end-to-end against the live database', async () => 
     g += 1;
     const over = { education: station.minEducation, money: 3000, food: 4, happiness: 20, gymMember: station.id !== 'com.gymMembership', married: false, marriageId: null };
     if (station.id === 'secret.robbery' || station.id === 'shop.receive') over.money = 100;
+    if (station.id === 'com.hospital') over.food = 0;
     if (station.id === 'wed.divorce' || station.id === 'wed.deposit') Object.assign(over, { married: true, marriageId: 'm_live' });
     await put(id, over);
     if (station.id === 'wed.divorce') await setDoc(doc(db, 'marriages', 'm_live'), { participants: [team(id)], hasDivorced: false });
@@ -482,8 +490,8 @@ test('load: 80 participants (10 groups x 8) scanning bursts, totals exact', asyn
       }
     }
   }
-  // sauna costs $100 each; give every group exactly enough for all 24
-  await Promise.all(Array.from({ length: GROUPS }, (_, i) => updateDoc(groupRef(i + 1), { money: 100 * MEMBERS * ROUNDS })));
+  // sauna costs $150 each; give every group exactly enough for all 24
+  await Promise.all(Array.from({ length: GROUPS }, (_, i) => updateDoc(groupRef(i + 1), { money: 150 * MEMBERS * ROUNDS })));
   const results = await Promise.allSettled(jobs);
   const secs = (Date.now() - t0) / 1000;
   const fulfilled = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
@@ -497,7 +505,7 @@ test('load: 80 participants (10 groups x 8) scanning bursts, totals exact', asyn
   // moved in lockstep and nothing was lost or double-applied.
   for (let g = 1; g <= GROUPS; g++) {
     const s = await read(g);
-    const visits = (100 * MEMBERS * ROUNDS - s.money) / 100;
+    const visits = (150 * MEMBERS * ROUNDS - s.money) / 150;
     assert.ok(Number.isInteger(visits) && visits >= 0 && visits <= MEMBERS * ROUNDS, `group ${g}: money ${s.money}`);
     assert.equal(s.happiness, 50 + 2 * visits, `group ${g}: happiness out of step with money`);
     const logged = (await getDocs(collection(db, 'redemptions'))).docs.filter((d) => d.data().groupId === team(g) && d.data().stationId === 'ent.sauna').length;
