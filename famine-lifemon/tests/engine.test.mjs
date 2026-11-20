@@ -4,6 +4,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 
 import {
   APPLE_MAX, DEFAULT_GROUP_COUNT, EDU, GAME_COOLDOWN_MS, INITIAL_DONATION_APPLES, LIMITS, MAX_GROUPS, MINUTE,
@@ -882,6 +884,30 @@ test('wording: every reason, station and summary renders', () => {
   }
   assert.equal(summaryText({ money: 0, food: 0, happiness: 0 }), 'Recorded');
   assert.equal(formatDelta({ money: 1500, food: -2, happiness: 1 }), '+$1,500  ·  −2 🍎  ·  +1 😄');
+});
+
+test('privacy: no real helper or committee names anywhere in the app', () => {
+  // Names from the organisers' documents. Matched as whole words, so
+  // "adjusting" and "blackjack" are not flagged.
+  const NAMES = ['Justin', 'Hayden', 'Wilson', 'Edwin', 'Chui', 'Anthony', 'Sammi', 'Angela', 'Sannie',
+    'Anastasia', 'Brandon', 'Stephanie', 'Stephanine', 'Jianne', 'Kosto', 'Isaac', 'Toby', 'Andy', 'Edmund',
+    'Kingson', 'Johnathan', 'Lonz', 'Kasey', 'Aston', 'Paolo', 'Chace', 'Kaylie', 'Adrian', 'Jayden'];
+  const pattern = new RegExp(`\\b(${NAMES.join('|')})\\b`, 'i');
+  const files = [];
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.(js|jsx|html|json)$/.test(e.name)) files.push(p);
+    }
+  };
+  walk(new URL('../src', import.meta.url).pathname);
+  walk(new URL('../public', import.meta.url).pathname);
+  assert.ok(files.length > 10);
+  for (const f of files) {
+    const hit = fs.readFileSync(f, 'utf8').split('\n').findIndex((line) => pattern.test(line));
+    assert.equal(hit, -1, `${path.basename(f)} line ${hit + 1} contains a real name`);
+  }
 });
 
 // --------------------------------------------------------------------- fuzz ---

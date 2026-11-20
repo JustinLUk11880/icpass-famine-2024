@@ -599,7 +599,7 @@ export const GLOBAL_EVENTS = {
     label: 'ICPASS Tax',
     when: '16:40 (optional)',
     description: 'Over $2000: lose 10%. Under $1000: gain 10%. Everyone +1 happiness. Rounded to whole dollars.',
-    announcement: '💸 President Anastasia has introduced the ICPASS Tax! Over $2000 pay 10%, under $1000 receive 10%, and everyone gains 1 happiness.',
+    announcement: '💸 The new president has introduced the ICPASS Tax! Over $2000 pay 10%, under $1000 receive 10%, and everyone gains 1 happiness.',
   },
 };
 
